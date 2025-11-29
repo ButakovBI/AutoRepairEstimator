@@ -1,0 +1,56 @@
+{
+    "base_images": {
+        "python_base": {
+            "dockerfile": "build/docker/python_base/Dockerfile"
+        },
+        "python_build": {
+            "dockerfile": "build/docker/python_build/Dockerfile"
+        }
+    },
+    "services": {
+        "prod_services": {
+            "api_service": {
+                "PARENT_IMAGE": "python_base_image:latest",
+                "dockerfile": "build/docker/api_service/Dockerfile",
+                "LIBS": ["misis_scenario_api"]
+            },
+            "inference_service": {
+                "PARENT_IMAGE": "python_base_image:latest",
+                "dockerfile": "build/docker/inference_service/Dockerfile",
+                "LIBS": ["misis_inference"]
+            },
+            "orchestrator_service": {
+                "PARENT_IMAGE": "python_base_image:latest",
+                "dockerfile": "build/docker/orchestrator_service/Dockerfile",
+                "LIBS": ["misis_orchestrator"]
+            },
+            "runner_service": {
+                "PARENT_IMAGE": "python_base_image:latest",
+                "dockerfile": "build/docker/runner_service/Dockerfile",
+                "LIBS": ["misis_runner"]
+            }
+        },
+        "test_services": {
+            "test_api_service": {
+                "PARENT_IMAGE": "python_base_image:latest",
+                "dockerfile": "build/docker/api_service/test.Dockerfile",
+                "LIBS": ["misis_scenario_api", "pytest"]
+            },
+            "test_inference_service": {
+                "PARENT_IMAGE": "python_base_image:latest",
+                "dockerfile": "build/docker/inference_service/test.Dockerfile",
+                "LIBS": ["misis_inference", "pytest"]
+            },
+            "test_orchestrator_service": {
+                "PARENT_IMAGE": "python_base_image:latest",
+                "dockerfile": "build/docker/orchestrator_service/test.Dockerfile",
+                "LIBS": ["misis_orchestrator", "pytest"]
+            },
+            "test_runner_service": {
+                "PARENT_IMAGE": "python_base_image:latest",
+                "dockerfile": "build/docker/runner_service/test.Dockerfile",
+                "LIBS": ["misis_runner", "pytest"]
+            }
+        }
+    }
+}

@@ -1,0 +1,26 @@
+name: misis-analytics-build
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  lint-build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Lint with ruff & flake8
+        run: |
+          pip install --default-timeout=3000 --retries=10 ruff flake8
+          ruff check source/
+          flake8 --max-line-length 150 build/ source/
+
+      - name: Install bootstrap, build wheels and run tests
+        run: |
+          chmod +x ./run.sh
+          ./run.sh --test
