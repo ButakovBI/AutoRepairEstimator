@@ -174,3 +174,8 @@ cython_debug/
 
 video_analytics_env/
 whl/
+_data/
+.agents/
+.claude/
+skills-lock.json
+test/
