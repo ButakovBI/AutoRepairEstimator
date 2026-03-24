@@ -87,9 +87,7 @@ class NotificationConsumer:
                 self._api,
                 peer_id,
                 str(request_id),
-                first_message=(
-                    "Не удалось обработать изображение автоматически. Укажите повреждения вручную:"
-                ),
+                first_message=("Не удалось обработать изображение автоматически. Укажите повреждения вручную:"),
             )
 
         elif notification_type == "request_timeout":
