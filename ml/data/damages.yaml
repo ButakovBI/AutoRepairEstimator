@@ -1,0 +1,12 @@
+path: ../datasets/damages
+train: images/train
+val: images/val
+test: images/test
+
+nc: 5
+names:
+  - scratch
+  - dent
+  - crack
+  - rust
+  - paint_chip

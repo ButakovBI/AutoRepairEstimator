@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from pytest import mark, raises
@@ -13,14 +13,14 @@ from auto_repair_estimator.backend.domain.value_objects.request_enums import Req
 
 def _new_request(mode: RequestMode, status: RequestStatus | None = None) -> RepairRequest:
     request_id = str(uuid4())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     timeout_at = now + timedelta(minutes=5)
     if status is None:
         status = RequestStatus.PRICING if mode is RequestMode.MANUAL else RequestStatus.CREATED
     return RepairRequest(
         id=request_id,
-        telegram_chat_id=1,
-        telegram_user_id=2,
+        chat_id=1,
+        user_id=2,
         mode=mode,
         status=status,
         created_at=now,
@@ -103,4 +103,3 @@ def test_transition_invalid_raises_error() -> None:
         sm.transition(request, RequestStatus.PRICING)
     assert exc.value.from_status is RequestStatus.DONE
     assert exc.value.to_status is RequestStatus.PRICING
-

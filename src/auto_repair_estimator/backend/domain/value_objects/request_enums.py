@@ -1,4 +1,4 @@
-from enum import Enum, auto
+from enum import Enum
 
 
 class RequestMode(str, Enum):
@@ -43,4 +43,3 @@ class DamageType(str, Enum):
 class DamageSource(str, Enum):
     ML = "ml"
     MANUAL = "manual"
-

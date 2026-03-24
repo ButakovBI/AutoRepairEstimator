@@ -1,26 +1,37 @@
-name: misis-analytics-build
+name: auto-repair-estimator-ci
 
 on:
   push:
-    branches: ['**']
+    branches: ["**"]
   pull_request:
-    branches: ['**']
+    branches: ["**"]
 
 jobs:
-  lint-build-test:
+  lint-test:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Lint with ruff & flake8
-        run: |
-          pip install --default-timeout=3000 --retries=10 ruff flake8
-          ruff check source/
-          flake8 --max-line-length 150 build/ source/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Install bootstrap, build wheels and run tests
-        run: |
-          chmod +x ./run.sh
-          ./run.sh --test
+      - name: Install dependencies
+        run: pip install ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check src/ tests/
+
+      - name: Check formatting with ruff
+        run: ruff format --check src/ tests/
+
+      - name: Type check with mypy
+        run: mypy src/
+
+      - name: Run tests with coverage
+        # On GitHub Actions runners (Ubuntu + Docker available) the DB integration
+        # tests will spin up a Postgres container via testcontainers automatically.
+        # The --cov-fail-under threshold accounts for infrastructure modules that
+        # are intentionally excluded from coverage measurement (see pyproject.toml).
+        run: pytest tests/ --cov=auto_repair_estimator --cov-report=term-missing --cov-fail-under=70

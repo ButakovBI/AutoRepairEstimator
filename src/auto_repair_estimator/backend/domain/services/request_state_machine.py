@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from auto_repair_estimator.backend.domain.entities.repair_request import RepairRequest
 from auto_repair_estimator.backend.domain.value_objects.request_enums import RequestStatus
@@ -20,23 +20,24 @@ class RequestStateMachine:
             return False
         if from_status is to_status:
             return True
-        if from_status is RequestStatus.CREATED and to_status in {RequestStatus.QUEUED, RequestStatus.PRICING, RequestStatus.FAILED}:
+        if from_status is RequestStatus.CREATED and to_status in {
+            RequestStatus.QUEUED,
+            RequestStatus.PRICING,
+            RequestStatus.FAILED,
+        }:
             return True
         if from_status is RequestStatus.QUEUED and to_status in {RequestStatus.PROCESSING, RequestStatus.FAILED}:
             return True
         if from_status is RequestStatus.PROCESSING and to_status in {RequestStatus.PRICING, RequestStatus.FAILED}:
             return True
-        if from_status is RequestStatus.PRICING and to_status in {RequestStatus.DONE, RequestStatus.FAILED}:
-            return True
-        return False
+        return from_status is RequestStatus.PRICING and to_status in {RequestStatus.DONE, RequestStatus.FAILED}
 
     def transition(self, request: RepairRequest, to_status: RequestStatus) -> RepairRequest:
         if not self.can_transition(request.status, to_status):
             raise InvalidStatusTransitionError(request.status, to_status)
         if request.status is to_status:
             return request
-        updated_at = datetime.now(timezone.utc)
+        updated_at = datetime.now(UTC)
         if updated_at <= request.updated_at:
             updated_at = request.updated_at + timedelta(microseconds=1)
         return request.with_status(to_status, updated_at=updated_at)
-

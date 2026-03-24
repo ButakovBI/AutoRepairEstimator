@@ -179,3 +179,5 @@ _data/
 .claude/
 skills-lock.json
 test/
+.cursor/
+.env*

@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 from auto_repair_estimator.backend.domain.value_objects.request_enums import PartType
 
@@ -14,6 +13,5 @@ class DetectedPart:
     y: float
     width: float
     height: float
-    mask_image_key: Optional[str] = None
-    crop_image_key: Optional[str] = None
-
+    mask_image_key: str | None = None
+    crop_image_key: str | None = None

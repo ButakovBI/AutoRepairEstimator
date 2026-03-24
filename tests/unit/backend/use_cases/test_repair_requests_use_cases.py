@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from pytest import mark, raises
@@ -24,8 +24,8 @@ async def test_create_repair_request_sets_initial_state_and_persists() -> None:
     repository = InMemoryRepairRequestRepository()
     use_case = CreateRepairRequestUseCase(repository=repository)
     inputs = [
-        CreateRepairRequestInput(telegram_chat_id=1, telegram_user_id=2, mode=RequestMode.ML),
-        CreateRepairRequestInput(telegram_chat_id=3, telegram_user_id=None, mode=RequestMode.MANUAL),
+        CreateRepairRequestInput(chat_id=1, user_id=2, mode=RequestMode.ML),
+        CreateRepairRequestInput(chat_id=3, user_id=None, mode=RequestMode.MANUAL),
     ]
 
     results = []
@@ -47,9 +47,7 @@ async def test_upload_photo_moves_created_ml_request_to_queued_and_sets_image_ke
     create_use_case = CreateRepairRequestUseCase(repository=repository)
     upload_use_case = UploadPhotoUseCase(repository=repository, state_machine=state_machine)
 
-    create_result = await create_use_case.execute(
-        CreateRepairRequestInput(telegram_chat_id=1, telegram_user_id=2, mode=RequestMode.ML)
-    )
+    create_result = await create_use_case.execute(CreateRepairRequestInput(chat_id=1, user_id=2, mode=RequestMode.ML))
     image_key = "raw-images/request-1.jpg"
     upload_result = await upload_use_case.execute(
         UploadPhotoInput(request_id=create_result.request.id, image_key=image_key)
@@ -67,7 +65,7 @@ async def test_upload_photo_rejects_manual_mode() -> None:
     upload_use_case = UploadPhotoUseCase(repository=repository, state_machine=state_machine)
 
     create_result = await create_use_case.execute(
-        CreateRepairRequestInput(telegram_chat_id=1, telegram_user_id=2, mode=RequestMode.MANUAL)
+        CreateRepairRequestInput(chat_id=1, user_id=2, mode=RequestMode.MANUAL)
     )
 
     with raises(ValueError):
@@ -82,11 +80,11 @@ async def test_confirm_pricing_moves_pricing_to_done() -> None:
     state_machine = RequestStateMachine()
     use_case = ConfirmPricingUseCase(repository=repository, state_machine=state_machine)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     request = RepairRequest(
         id=str(uuid4()),
-        telegram_chat_id=1,
-        telegram_user_id=2,
+        chat_id=1,
+        user_id=2,
         mode=RequestMode.MANUAL,
         status=RequestStatus.PRICING,
         created_at=now,
@@ -99,4 +97,3 @@ async def test_confirm_pricing_moves_pricing_to_done() -> None:
     assert result.request.status is RequestStatus.DONE
     assert result.total_cost == 0.0
     assert result.total_hours == 0.0
-

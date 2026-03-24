@@ -10,4 +10,3 @@ class PricingRule:
     damage_type: DamageType
     labor_hours: float
     labor_cost: float
-

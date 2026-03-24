@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -7,5 +7,4 @@ class PricingResult:
     request_id: str
     total_hours: float
     total_cost: float
-    breakdown: dict[str, Any]
-
+    breakdown: list[dict[str, Any]] = field(default_factory=list)
