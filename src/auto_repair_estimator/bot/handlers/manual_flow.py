@@ -9,8 +9,8 @@ from vkbottle.bot import MessageEvent
 from auto_repair_estimator.bot.backend_client import BackendClient
 from auto_repair_estimator.bot.keyboards.damage_edit import add_more_or_confirm_keyboard
 from auto_repair_estimator.bot.keyboards.damage_type_selection import damage_type_selection_keyboard
-from auto_repair_estimator.bot.part_selection_send import send_part_selection_messages
 from auto_repair_estimator.bot.labels import DAMAGE_LABELS, PART_LABELS
+from auto_repair_estimator.bot.part_selection_send import send_part_selection_messages
 
 
 async def handle_mode_selection(event: MessageEvent, payload: dict[str, Any], backend: BackendClient, api: API) -> None:

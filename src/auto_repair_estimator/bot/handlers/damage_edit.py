@@ -12,8 +12,8 @@ from auto_repair_estimator.bot.keyboards.damage_edit import (
     edit_damage_type_keyboard,
     inference_result_keyboard,
 )
-from auto_repair_estimator.bot.part_selection_send import send_part_selection_messages
 from auto_repair_estimator.bot.labels import DAMAGE_LABELS, PART_LABELS
+from auto_repair_estimator.bot.part_selection_send import send_part_selection_messages
 
 
 def _format_damages_text(damages: list[dict[str, Any]]) -> str:
