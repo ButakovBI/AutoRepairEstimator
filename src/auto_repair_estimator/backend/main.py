@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from loguru import logger
 
+from auto_repair_estimator.backend.adapters.repositories.in_memory_outbox_repository import InMemoryOutboxRepository
 from auto_repair_estimator.backend.adapters.repositories.in_memory_repair_request_repository import (
     InMemoryRepairRequestRepository,
 )
@@ -76,9 +77,13 @@ class _InMemoryPricingRuleRepository:
 
 def _init_dev_state(app: FastAPI) -> None:
     """Populate app.state with in-memory repos (no infrastructure needed)."""
+    config = get_config()
     app.state.request_repo = InMemoryRepairRequestRepository()
     app.state.damage_repo = _InMemoryDamageRepository()
     app.state.pricing_rule_repo = _InMemoryPricingRuleRepository()
+    app.state.outbox_repo = InMemoryOutboxRepository()
+    app.state.s3_bucket_raw = config.s3_bucket_raw
+    app.state.kafka_topic_inference_requests = config.kafka_topic_inference_requests
 
 
 @asynccontextmanager
@@ -128,6 +133,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.request_repo = request_repo
         app.state.damage_repo = damage_repo
         app.state.pricing_rule_repo = PostgresPricingRuleRepository(pool)
+        app.state.outbox_repo = outbox_repo
+        app.state.storage = storage
+        app.state.s3_bucket_raw = config.s3_bucket_raw
+        app.state.kafka_topic_inference_requests = config.kafka_topic_inference_requests
 
         producer = KafkaProducer(config.kafka_bootstrap_servers)
         await producer.start()

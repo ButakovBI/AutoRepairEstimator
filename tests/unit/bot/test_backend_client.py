@@ -111,7 +111,16 @@ class TestDeleteDamage:
 
 class TestConfirmPricing:
     async def test_returns_pricing_result(self):
-        expected = {"total_cost": 5000.0, "total_hours": 3.5, "breakdown": []}
+        # Backend always returns min/max ranges; the client is a thin proxy
+        # that passes the dict through.
+        expected = {
+            "total_cost_min": 3_000.0,
+            "total_cost_max": 5_000.0,
+            "total_hours_min": 8.0,
+            "total_hours_max": 16.0,
+            "breakdown": [],
+            "notes": [],
+        }
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=expected)
@@ -119,5 +128,7 @@ class TestConfirmPricing:
         client = _make_client(handler)
         result = await client.confirm_pricing("req-1")
 
-        assert result["total_cost"] == 5000.0
-        assert result["total_hours"] == 3.5
+        assert result["total_cost_min"] == 3_000.0
+        assert result["total_cost_max"] == 5_000.0
+        assert result["total_hours_min"] == 8.0
+        assert result["total_hours_max"] == 16.0

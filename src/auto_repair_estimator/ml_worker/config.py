@@ -22,6 +22,15 @@ class MLWorkerConfig(BaseSettings):
     damages_confidence_threshold: float = 0.5
     max_image_bytes: int = 10 * 1024 * 1024
 
+    # Comma-separated list of PartType values to skip during cropping.
+    # Example: "headlight" — set via env CROP_EXCLUDED_PARTS.
+    # Empty by default: damage detection runs on every detected part.
+    crop_excluded_parts: str = ""
+
+    @property
+    def crop_excluded_parts_set(self) -> frozenset[str]:
+        return frozenset(p.strip() for p in self.crop_excluded_parts.split(",") if p.strip())
+
 
 def get_config() -> MLWorkerConfig:
     return MLWorkerConfig()

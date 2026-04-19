@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from loguru import logger
 
+from auto_repair_estimator.backend.domain.entities.outbox_event import OutboxEvent
 from auto_repair_estimator.backend.domain.entities.repair_request import RepairRequest
+from auto_repair_estimator.backend.domain.interfaces.outbox_repository import OutboxRepository
 from auto_repair_estimator.backend.domain.interfaces.repair_request_repository import RepairRequestRepository
 from auto_repair_estimator.backend.domain.services.request_state_machine import RequestStateMachine
 from auto_repair_estimator.backend.domain.value_objects.request_enums import RequestMode, RequestStatus
@@ -52,9 +55,24 @@ class UploadPhotoResult:
 
 
 class UploadPhotoUseCase:
-    def __init__(self, repository: RepairRequestRepository, state_machine: RequestStateMachine) -> None:
+    """Marks a ML request as QUEUED and enqueues an ``inference_requests`` outbox event.
+
+    The DB update and the outbox insert are meant to run in the same Postgres
+    transaction at the adapter level. Here we keep both writes through the
+    repository abstractions so tests can use in-memory fakes.
+    """
+
+    def __init__(
+        self,
+        repository: RepairRequestRepository,
+        state_machine: RequestStateMachine,
+        outbox_repository: OutboxRepository,
+        inference_requests_topic: str,
+    ) -> None:
         self._repository = repository
         self._state_machine = state_machine
+        self._outbox = outbox_repository
+        self._inference_requests_topic = inference_requests_topic
 
     async def execute(self, data: UploadPhotoInput) -> UploadPhotoResult:
         request = await self._repository.get(data.request_id)
@@ -79,7 +97,17 @@ class UploadPhotoUseCase:
         )
         queued = self._state_machine.transition(with_image, RequestStatus.QUEUED)
         await self._repository.update(queued)
-        logger.info("Uploaded photo for request id={} image_key={}", queued.id, data.image_key)
+
+        event = OutboxEvent(
+            id=str(uuid4()),
+            aggregate_id=queued.id,
+            topic=self._inference_requests_topic,
+            payload={"request_id": queued.id, "image_key": data.image_key},
+            created_at=datetime.now(UTC),
+        )
+        await self._outbox.add(event)
+
+        logger.info("Uploaded photo for request id={} image_key={} -> outbox inference_requests", queued.id, data.image_key)
         return UploadPhotoResult(request=queued)
 
 
@@ -91,8 +119,6 @@ class ConfirmPricingInput:
 @dataclass
 class ConfirmPricingResult:
     request: RepairRequest
-    total_cost: float
-    total_hours: float
 
 
 class ConfirmPricingUseCase:
@@ -110,4 +136,4 @@ class ConfirmPricingUseCase:
         done = self._state_machine.transition(request, RequestStatus.DONE)
         await self._repository.update(done)
         logger.info("Confirmed pricing for request id={}", done.id)
-        return ConfirmPricingResult(request=done, total_cost=0.0, total_hours=0.0)
+        return ConfirmPricingResult(request=done)

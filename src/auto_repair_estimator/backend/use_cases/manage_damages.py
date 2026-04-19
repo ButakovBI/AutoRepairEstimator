@@ -55,8 +55,16 @@ class AddDamageUseCase:
 
 @dataclass
 class EditDamageInput:
+    """Input for editing a previously detected damage.
+
+    ``damage_type`` is required; ``part_type`` is optional — when supplied,
+    the damage is re-assigned to a different car part, covering spec §3's
+    "Изменить принадлежность повреждения к детали автомобиля" requirement.
+    """
+
     damage_id: str
     damage_type: DamageType
+    part_type: PartType | None = None
 
 
 @dataclass
@@ -75,11 +83,13 @@ class EditDamageUseCase:
         if damage.is_deleted:
             raise ValueError(f"damage {data.damage_id} is deleted")
 
+        new_part_type = data.part_type if data.part_type is not None else damage.part_type
+
         updated = DetectedDamage(
             id=damage.id,
             request_id=damage.request_id,
             damage_type=data.damage_type,
-            part_type=damage.part_type,
+            part_type=new_part_type,
             source=damage.source,
             is_deleted=False,
             part_id=damage.part_id,
@@ -87,7 +97,12 @@ class EditDamageUseCase:
             mask_image_key=damage.mask_image_key,
         )
         await self._damages.update(updated)
-        logger.info("Updated damage id={} new_type={}", damage.id, data.damage_type)
+        logger.info(
+            "Updated damage id={} new_type={} new_part={}",
+            damage.id,
+            data.damage_type,
+            new_part_type,
+        )
         return EditDamageResult(damage=updated)
 
 

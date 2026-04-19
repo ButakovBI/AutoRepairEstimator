@@ -3,10 +3,13 @@ train: images/train
 val: images/val
 test: images/test
 
-nc: 5
+nc: 8
 names:
   - scratch
   - dent
-  - crack
-  - rust
   - paint_chip
+  - rust
+  - crack
+  - broken_glass
+  - flat_tire
+  - broken_headlight

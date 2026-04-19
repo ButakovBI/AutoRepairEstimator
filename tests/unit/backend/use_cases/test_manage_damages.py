@@ -186,7 +186,7 @@ async def test_edit_damage_preserves_part_type_and_source() -> None:
         id=damage_id,
         request_id="req-1",
         damage_type=DamageType.SCRATCH,
-        part_type=PartType.BUMPER_FRONT,
+        part_type=PartType.BUMPER,
         source=DamageSource.ML,
         is_deleted=False,
     )
@@ -197,7 +197,7 @@ async def test_edit_damage_preserves_part_type_and_source() -> None:
     result = await use_case.execute(EditDamageInput(damage_id=damage_id, damage_type=DamageType.RUST))
 
     # Assert — side fields unchanged
-    assert result.damage.part_type is PartType.BUMPER_FRONT
+    assert result.damage.part_type is PartType.BUMPER
     assert result.damage.source is DamageSource.ML
 
 

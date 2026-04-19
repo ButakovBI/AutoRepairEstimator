@@ -9,8 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from auto_repair_estimator.backend.domain.interfaces.damage_repository import DamageRepository
+from auto_repair_estimator.backend.domain.interfaces.outbox_repository import OutboxRepository
 from auto_repair_estimator.backend.domain.interfaces.pricing_rule_repository import PricingRuleRepository
 from auto_repair_estimator.backend.domain.interfaces.repair_request_repository import RepairRequestRepository
+from auto_repair_estimator.backend.domain.interfaces.storage_gateway import StorageGateway
+from auto_repair_estimator.backend.domain.services.image_validator import validate_image_bytes
 from auto_repair_estimator.backend.domain.services.pricing_service import PricingService
 from auto_repair_estimator.backend.domain.services.request_state_machine import RequestStateMachine
 from auto_repair_estimator.backend.domain.value_objects.request_enums import (
@@ -59,6 +62,27 @@ def _pricing_rule_repo(request: Request) -> PricingRuleRepository:
     return request.app.state.pricing_rule_repo  # type: ignore[no-any-return]
 
 
+def _storage(request: Request) -> StorageGateway | None:
+    """Return the configured storage gateway or ``None`` if the app runs in
+    dev/test mode without real object storage. Endpoints gracefully skip
+    bytes-level validation in that case.
+    """
+
+    return getattr(request.app.state, "storage", None)
+
+
+def _outbox_repo(request: Request) -> OutboxRepository:
+    return request.app.state.outbox_repo  # type: ignore[no-any-return]
+
+
+def _raw_bucket(request: Request) -> str:
+    return getattr(request.app.state, "s3_bucket_raw", "raw-images")  # type: ignore[no-any-return]
+
+
+def _inference_requests_topic(request: Request) -> str:
+    return getattr(request.app.state, "kafka_topic_inference_requests", "inference_requests")  # type: ignore[no-any-return]
+
+
 def _sm(request: Request) -> RequestStateMachine:
     return _state_machine
 
@@ -72,8 +96,15 @@ def get_create_use_case(
 def get_upload_photo_use_case(
     repo: RepairRequestRepository = Depends(_request_repo),
     sm: RequestStateMachine = Depends(_sm),
+    outbox: OutboxRepository = Depends(_outbox_repo),
+    inference_requests_topic: str = Depends(_inference_requests_topic),
 ) -> UploadPhotoUseCase:
-    return UploadPhotoUseCase(repository=repo, state_machine=sm)
+    return UploadPhotoUseCase(
+        repository=repo,
+        state_machine=sm,
+        outbox_repository=outbox,
+        inference_requests_topic=inference_requests_topic,
+    )
 
 
 def get_confirm_pricing_use_case(
@@ -141,6 +172,7 @@ class DamageBody(BaseModel):
 
 class EditDamageBody(BaseModel):
     damage_type: DamageType
+    part_type: PartType | None = None
 
 
 class DamageResponse(BaseModel):
@@ -154,9 +186,12 @@ class DamageResponse(BaseModel):
 class PricingResponse(BaseModel):
     id: str
     status: RequestStatus
-    total_cost: float
-    total_hours: float
+    total_cost_min: float
+    total_cost_max: float
+    total_hours_min: float
+    total_hours_max: float
     breakdown: list[dict[str, Any]]
+    notes: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +230,8 @@ async def get_request(
 async def create_request(
     body: CreateRequestBody,
     use_case: CreateRepairRequestUseCase = Depends(get_create_use_case),
+    storage: StorageGateway | None = Depends(_storage),
+    raw_bucket: str = Depends(_raw_bucket),
 ) -> RequestResponse:
     result = await use_case.execute(
         CreateRepairRequestInput(
@@ -203,7 +240,18 @@ async def create_request(
             mode=body.mode,
         )
     )
-    return RequestResponse(id=result.request.id, status=result.request.status, mode=result.request.mode)
+
+    presigned_url: str | None = None
+    if body.mode is RequestMode.ML and storage is not None:
+        image_key = f"{raw_bucket}/{result.request.id}.jpg"
+        presigned_url = await storage.generate_presigned_put_url(image_key)
+
+    return RequestResponse(
+        id=result.request.id,
+        status=result.request.status,
+        mode=result.request.mode,
+        presigned_put_url=presigned_url,
+    )
 
 
 @router.post("/{request_id}/photo", response_model=RequestResponse)
@@ -211,7 +259,20 @@ async def upload_photo(
     request_id: str,
     body: UploadPhotoBody,
     use_case: UploadPhotoUseCase = Depends(get_upload_photo_use_case),
+    storage: StorageGateway | None = Depends(_storage),
 ) -> RequestResponse:
+    # Bytes-level validation runs only when real object storage is wired in;
+    # in-memory dev/test mode skips it (no bucket to download from).
+    if storage is not None:
+        try:
+            data = await storage.download(body.image_key)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"image not found in storage: {exc}") from exc
+        try:
+            validate_image_bytes(data)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     try:
         result = await use_case.execute(UploadPhotoInput(request_id=request_id, image_key=body.image_key))
     except ValueError as exc:
@@ -245,7 +306,13 @@ async def edit_damage(
     use_case: EditDamageUseCase = Depends(get_edit_damage_use_case),
 ) -> DamageResponse:
     try:
-        result = await use_case.execute(EditDamageInput(damage_id=damage_id, damage_type=body.damage_type))
+        result = await use_case.execute(
+            EditDamageInput(
+                damage_id=damage_id,
+                damage_type=body.damage_type,
+                part_type=body.part_type,
+            )
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     d = result.damage
@@ -280,9 +347,12 @@ async def confirm_pricing(
     return PricingResponse(
         id=result.request.id,
         status=result.request.status,
-        total_cost=pricing_result.total_cost,
-        total_hours=pricing_result.total_hours,
+        total_cost_min=pricing_result.total_cost_min,
+        total_cost_max=pricing_result.total_cost_max,
+        total_hours_min=pricing_result.total_hours_min,
+        total_hours_max=pricing_result.total_hours_max,
         breakdown=pricing_result.breakdown,
+        notes=pricing_result.notes,
     )
 
 

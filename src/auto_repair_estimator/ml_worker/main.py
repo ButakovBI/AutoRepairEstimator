@@ -41,6 +41,7 @@ async def process_request(
             part_detections,
             request_id,
             config.s3_bucket_crops,
+            excluded_parts=config.crop_excluded_parts_set,
         )
 
         for crop in crops:

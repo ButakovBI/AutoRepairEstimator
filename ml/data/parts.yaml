@@ -5,15 +5,15 @@ test: images/test
 
 nc: 12
 names:
-  - bumper_front
-  - bumper_rear
-  - door_front_left
-  - door_front_right
-  - door_rear_left
-  - door_rear_right
-  - hood
+  - door
+  - front_fender
+  - rear_fender
   - trunk
-  - fender_front_left
-  - fender_front_right
-  - fender_rear_left
-  - fender_rear_right
+  - hood
+  - roof
+  - headlight
+  - front_windshield
+  - rear_windshield
+  - side_window
+  - wheel
+  - bumper

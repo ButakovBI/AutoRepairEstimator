@@ -55,13 +55,13 @@ class TestModeSelectionKeyboard:
 
 
 class TestPartSelectionKeyboard:
-    def test_contains_all_fourteen_parts_across_keyboards(self):
+    def test_contains_all_twelve_parts_across_keyboards(self):
         keybs = part_selection_keyboards_list("req-1")
         all_buttons: list[dict] = []
         for kb_json in keybs:
             kb = _parse_keyboard(kb_json)
             all_buttons.extend(btn for row in kb["buttons"] for btn in row)
-        assert len(all_buttons) == 14
+        assert len(all_buttons) == 12
 
     def test_each_button_has_part_cmd_and_request_id(self):
         keybs = part_selection_keyboards_list("req-1")
@@ -73,25 +73,27 @@ class TestPartSelectionKeyboard:
                 assert p["rid"] == "req-1"
                 assert "pt" in p
 
-    def test_first_button_is_bumper_front(self):
+    def test_first_button_is_door(self):
         first_kb = _parse_keyboard(part_selection_keyboards_list("req-1")[0])
         first = first_kb["buttons"][0][0]
-        assert _payload(first)["pt"] == "bumper_front"
+        assert _payload(first)["pt"] == "door"
 
     def test_each_keyboard_fits_vk_inline_limits(self):
+        from auto_repair_estimator.bot.vk_limits import VK_INLINE_MAX_BUTTONS, VK_INLINE_MAX_ROWS
+
         for kb_json in part_selection_keyboards_list("req-1"):
             kb = _parse_keyboard(kb_json)
             rows = kb["buttons"]
-            assert len(rows) <= 6
+            assert len(rows) <= VK_INLINE_MAX_ROWS
             all_btns = [b for row in rows for b in row]
-            assert len(all_btns) <= 10
+            assert len(all_btns) <= VK_INLINE_MAX_BUTTONS
 
 
 class TestDamageTypeSelectionKeyboard:
-    def test_contains_five_damage_types(self):
+    def test_contains_eight_damage_types(self):
         kb = _parse_keyboard(damage_type_selection_keyboard("req-1", "hood"))
         all_buttons = [btn for row in kb["buttons"] for btn in row]
-        assert len(all_buttons) == 5
+        assert len(all_buttons) == 8
 
     def test_button_payloads_include_part_type_and_damage_type(self):
         kb = _parse_keyboard(damage_type_selection_keyboard("req-1", "hood"))
@@ -141,10 +143,10 @@ class TestDamageEditKeyboard:
 
 
 class TestEditDamageTypeKeyboard:
-    def test_contains_all_five_damage_types(self):
+    def test_contains_all_eight_damage_types(self):
         kb = _parse_keyboard(edit_damage_type_keyboard("req-1", "d1"))
         all_buttons = [btn for row in kb["buttons"] for btn in row]
-        assert len(all_buttons) == 5
+        assert len(all_buttons) == 8
         for btn in all_buttons:
             p = _payload(btn)
             assert p["cmd"] == "edtype"

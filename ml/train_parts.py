@@ -7,7 +7,7 @@ from pathlib import Path
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train YOLOv8-seg for car parts segmentation")
     parser.add_argument("--data", default="data/parts.yaml", help="Path to dataset YAML")
-    parser.add_argument("--model", default="yolov8n-seg.pt", help="Base model")
+    parser.add_argument("--model", default="yolov8m-seg.pt", help="Base model")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--batch", type=int, default=16)

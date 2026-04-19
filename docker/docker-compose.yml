@@ -143,18 +143,6 @@ services:
     volumes:
       - ./models:/app/models:ro
 
-  nginx:
-    build:
-      context: .
-      dockerfile: Dockerfile.nginx
-    container_name: auto-repair-nginx
-    depends_on:
-      bot:
-        condition: service_started
-    ports:
-      - "8001:8001"
-    restart: unless-stopped
-
 volumes:
   postgres_auto_repair_data:
   minio_data:

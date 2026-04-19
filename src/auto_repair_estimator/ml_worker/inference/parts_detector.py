@@ -5,8 +5,6 @@ from typing import Any
 
 from loguru import logger
 
-EXCLUDED_PARTS = {"headlight_left", "headlight_right"}
-
 
 @dataclass
 class PartDetection:
@@ -46,8 +44,6 @@ class PartsDetector:
                 part_type = names[class_id]
 
                 if confidence < self._threshold:
-                    continue
-                if part_type in EXCLUDED_PARTS:
                     continue
 
                 bbox = box.xywhn[0].tolist()

@@ -73,9 +73,36 @@ class ProcessInferenceResultUseCase:
             logger.warning("ProcessInferenceResult: request {} not found", data.request_id)
             return
 
-        if request.status is RequestStatus.PRICING:
-            logger.info("ProcessInferenceResult: request {} already in PRICING, ignoring duplicate", data.request_id)
+        if request.status in {RequestStatus.PRICING, RequestStatus.DONE, RequestStatus.FAILED}:
+            logger.info(
+                "ProcessInferenceResult: request {} is in terminal/advanced state {}, ignoring duplicate",
+                data.request_id,
+                request.status.value,
+            )
             return
+
+        # Idempotency for PROCESSING state: if the previous delivery already
+        # persisted detected parts for this request but crashed before moving
+        # the state machine to PRICING, a redelivered message must NOT create
+        # duplicate parts/damages. We detect the "already processed" condition
+        # by checking for pre-existing detected parts; a fresh request cannot
+        # have any.
+        if request.status is RequestStatus.PROCESSING:
+            existing_parts = await self._parts.get_by_request_id(data.request_id)
+            if existing_parts:
+                logger.info(
+                    "ProcessInferenceResult: request {} already has {} detected parts; "
+                    "finishing transition to PRICING without duplicating data",
+                    data.request_id,
+                    len(existing_parts),
+                )
+                updated_request = await self._update_request_status(request, data)
+                await self._create_notification_event(updated_request, data, is_success=data.status == "success")
+                return
+
+        if request.status is RequestStatus.QUEUED:
+            request = self._sm.transition(request, RequestStatus.PROCESSING)
+            await self._requests.update(request)
 
         is_success = data.status == "success"
         saved_parts: list[DetectedPart] = []

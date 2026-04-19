@@ -83,5 +83,9 @@ async def test_confirm_pricing_transitions_manual_request_to_done() -> None:
     body = pricing_resp.json()
     assert body["id"] == request_id
     assert body["status"] == "done"
-    assert body["total_cost"] == 0.0
-    assert body["total_hours"] == 0.0
+    # No damages were registered, so every bound of every range is zero.
+    assert body["total_cost_min"] == 0.0
+    assert body["total_cost_max"] == 0.0
+    assert body["total_hours_min"] == 0.0
+    assert body["total_hours_max"] == 0.0
+    assert body["breakdown"] == []

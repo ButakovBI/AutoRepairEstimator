@@ -47,13 +47,24 @@ CREATE TABLE IF NOT EXISTS detected_damages (
 CREATE INDEX IF NOT EXISTS idx_detected_damages_request_id
     ON detected_damages (request_id);
 
+-- pricing_rules: one row per (part, damage). The workshop rate card (see
+-- thesis tables 5 and 6) is inherently a range rather than a single number
+-- because real-world labour always has an upper and lower estimate. We store
+-- four columns so the bot can render e.g. "23–30 тыс. руб., 2–3 дня" without
+-- losing precision. For scratches we store the painting range here; the
+-- cheaper polishing alternative is a separate note driven by the constants
+-- in auto_repair_estimator.backend.domain.value_objects.pricing_constants.
 CREATE TABLE IF NOT EXISTS pricing_rules (
     id SERIAL PRIMARY KEY,
     part_type VARCHAR NOT NULL,
     damage_type VARCHAR NOT NULL,
-    labor_hours FLOAT NOT NULL,
-    labor_cost_rub FLOAT NOT NULL,
-    UNIQUE (part_type, damage_type)
+    labor_hours_min FLOAT NOT NULL,
+    labor_hours_max FLOAT NOT NULL,
+    labor_cost_min_rub FLOAT NOT NULL,
+    labor_cost_max_rub FLOAT NOT NULL,
+    UNIQUE (part_type, damage_type),
+    CHECK (labor_hours_min <= labor_hours_max),
+    CHECK (labor_cost_min_rub <= labor_cost_max_rub)
 );
 
 CREATE TABLE IF NOT EXISTS outbox_events (
@@ -69,75 +80,75 @@ CREATE INDEX IF NOT EXISTS idx_outbox_events_unpublished
     ON outbox_events (created_at)
     WHERE published_at IS NULL;
 
-INSERT INTO pricing_rules (part_type, damage_type, labor_hours, labor_cost_rub) VALUES
-    ('bumper_front',      'scratch',    1.0,  800.0),
-    ('bumper_front',      'dent',       2.0, 1500.0),
-    ('bumper_front',      'crack',      3.0, 2500.0),
-    ('bumper_front',      'rust',       2.5, 2000.0),
-    ('bumper_front',      'paint_chip', 0.5,  400.0),
-    ('bumper_rear',       'scratch',    1.0,  800.0),
-    ('bumper_rear',       'dent',       2.0, 1500.0),
-    ('bumper_rear',       'crack',      3.0, 2500.0),
-    ('bumper_rear',       'rust',       2.5, 2000.0),
-    ('bumper_rear',       'paint_chip', 0.5,  400.0),
-    ('door_front_left',   'scratch',    1.5, 1200.0),
-    ('door_front_left',   'dent',       3.0, 2500.0),
-    ('door_front_left',   'crack',      4.0, 3500.0),
-    ('door_front_left',   'rust',       3.5, 3000.0),
-    ('door_front_left',   'paint_chip', 0.5,  400.0),
-    ('door_front_right',  'scratch',    1.5, 1200.0),
-    ('door_front_right',  'dent',       3.0, 2500.0),
-    ('door_front_right',  'crack',      4.0, 3500.0),
-    ('door_front_right',  'rust',       3.5, 3000.0),
-    ('door_front_right',  'paint_chip', 0.5,  400.0),
-    ('door_rear_left',    'scratch',    1.5, 1200.0),
-    ('door_rear_left',    'dent',       3.0, 2500.0),
-    ('door_rear_left',    'crack',      4.0, 3500.0),
-    ('door_rear_left',    'rust',       3.5, 3000.0),
-    ('door_rear_left',    'paint_chip', 0.5,  400.0),
-    ('door_rear_right',   'scratch',    1.5, 1200.0),
-    ('door_rear_right',   'dent',       3.0, 2500.0),
-    ('door_rear_right',   'crack',      4.0, 3500.0),
-    ('door_rear_right',   'rust',       3.5, 3000.0),
-    ('door_rear_right',   'paint_chip', 0.5,  400.0),
-    ('hood',              'scratch',    1.5, 1200.0),
-    ('hood',              'dent',       3.5, 3000.0),
-    ('hood',              'crack',      5.0, 4500.0),
-    ('hood',              'rust',       4.0, 3500.0),
-    ('hood',              'paint_chip', 0.5,  400.0),
-    ('trunk',             'scratch',    1.5, 1200.0),
-    ('trunk',             'dent',       3.0, 2500.0),
-    ('trunk',             'crack',      4.5, 4000.0),
-    ('trunk',             'rust',       3.5, 3000.0),
-    ('trunk',             'paint_chip', 0.5,  400.0),
-    ('fender_front_left', 'scratch',    1.0, 1000.0),
-    ('fender_front_left', 'dent',       2.5, 2000.0),
-    ('fender_front_left', 'crack',      3.5, 3000.0),
-    ('fender_front_left', 'rust',       3.0, 2500.0),
-    ('fender_front_left', 'paint_chip', 0.5,  400.0),
-    ('fender_front_right','scratch',    1.0, 1000.0),
-    ('fender_front_right','dent',       2.5, 2000.0),
-    ('fender_front_right','crack',      3.5, 3000.0),
-    ('fender_front_right','rust',       3.0, 2500.0),
-    ('fender_front_right','paint_chip', 0.5,  400.0),
-    ('fender_rear_left',  'scratch',    1.0, 1000.0),
-    ('fender_rear_left',  'dent',       2.5, 2000.0),
-    ('fender_rear_left',  'crack',      3.5, 3000.0),
-    ('fender_rear_left',  'rust',       3.0, 2500.0),
-    ('fender_rear_left',  'paint_chip', 0.5,  400.0),
-    ('fender_rear_right', 'scratch',    1.0, 1000.0),
-    ('fender_rear_right', 'dent',       2.5, 2000.0),
-    ('fender_rear_right', 'crack',      3.5, 3000.0),
-    ('fender_rear_right', 'rust',       3.0, 2500.0),
-    ('fender_rear_right', 'paint_chip', 0.5,  400.0),
-    ('headlight_left',    'scratch',    0.5,  600.0),
-    ('headlight_left',    'dent',       1.0, 1200.0),
-    ('headlight_left',    'crack',      2.0, 3500.0),
-    ('headlight_left',    'rust',       1.5, 2000.0),
-    ('headlight_left',    'paint_chip', 0.5,  600.0),
-    ('headlight_right',   'scratch',    0.5,  600.0),
-    ('headlight_right',   'dent',       1.0, 1200.0),
-    ('headlight_right',   'crack',      2.0, 3500.0),
-    ('headlight_right',   'rust',       1.5, 2000.0),
-    ('headlight_right',   'paint_chip', 0.5,  600.0)
+-- Seed data is a 1:1 transcription of thesis tables 5 (cost, thousands of
+-- RUB) and 6 (duration, business days/hours). Conversions used:
+--   * costs are stored in RUB: table value * 1000
+--   * "1 day"  = 8 h, "1.5 days" = 12 h, "2 days"   = 16 h,
+--     "2-3 days" = 16-24 h, "5 days" = 40 h, "0.5 days" = 4 h,
+--     "1-2 days" = 8-16 h.
+-- Damage-type mapping to table columns:
+--   * scratch     -> "Царапина (покраска)" (painting; polishing is a soft
+--                    alternative surfaced via the bot note, not a row here)
+--   * rust        -> same as "Царапина (покраска)" per requirements spec
+--   * dent        -> "Вмятина (рихтовка + покраска)"
+--   * paint_chip  -> "Замена детали"
+--   * crack       -> "Замена детали" for body parts only (never on glass:
+--                    on glass/headlight only broken_glass / broken_headlight
+--                    are priced; other damages there are filtered out)
+--   * broken_glass / broken_headlight -> "Замена детали"
+--   * flat_tire / anything on wheel   -> no row here (routed to the tyre
+--                    shop via a user-facing note)
+INSERT INTO pricing_rules (part_type, damage_type,
+                           labor_hours_min, labor_hours_max,
+                           labor_cost_min_rub, labor_cost_max_rub) VALUES
+    -- Front fender: замена 20, вмятина 23-30, 2-3 дня
+    ('front_fender',     'scratch',          8,  8,   10000,  18000),
+    ('front_fender',     'rust',             8,  8,   10000,  18000),
+    ('front_fender',     'dent',            16, 24,   23000,  30000),
+    ('front_fender',     'paint_chip',       8,  8,   20000,  20000),
+    ('front_fender',     'crack',            8,  8,   20000,  20000),
+    -- Rear fender: замена 75-100, 5 дней
+    ('rear_fender',      'scratch',          8,  8,   10000,  18000),
+    ('rear_fender',      'rust',             8,  8,   10000,  18000),
+    ('rear_fender',      'dent',            16, 24,   23000,  30000),
+    ('rear_fender',      'paint_chip',      40, 40,   75000, 100000),
+    ('rear_fender',      'crack',           40, 40,   75000, 100000),
+    -- Door: замена 20, 1.5-2 дня
+    ('door',             'scratch',          8,  8,   10000,  18000),
+    ('door',             'rust',             8,  8,   10000,  18000),
+    ('door',             'dent',            16, 24,   23000,  30000),
+    ('door',             'paint_chip',      12, 16,   20000,  20000),
+    ('door',             'crack',           12, 16,   20000,  20000),
+    -- Trunk: замена 20, 1.5-2 дня
+    ('trunk',            'scratch',          8,  8,   10000,  18000),
+    ('trunk',            'rust',             8,  8,   10000,  18000),
+    ('trunk',            'dent',            16, 24,   23000,  30000),
+    ('trunk',            'paint_chip',      12, 16,   20000,  20000),
+    ('trunk',            'crack',           12, 16,   20000,  20000),
+    -- Roof: замена 75-100, 5 дней
+    ('roof',             'scratch',          8,  8,   10000,  18000),
+    ('roof',             'rust',             8,  8,   10000,  18000),
+    ('roof',             'dent',            16, 24,   23000,  30000),
+    ('roof',             'paint_chip',      40, 40,   75000, 100000),
+    ('roof',             'crack',           40, 40,   75000, 100000),
+    -- Hood: вмятина 30-35 (2 дня), замена 28-30 (2 дня)
+    ('hood',             'scratch',          8,  8,   10000,  18000),
+    ('hood',             'rust',             8,  8,   10000,  18000),
+    ('hood',             'dent',            16, 16,   30000,  35000),
+    ('hood',             'paint_chip',      16, 16,   28000,  30000),
+    ('hood',             'crack',           16, 16,   28000,  30000),
+    -- Bumper: вмятина 3-5 (1-2 дня), замена 18 (1.5 дня)
+    ('bumper',           'scratch',          8,  8,   10000,  18000),
+    ('bumper',           'rust',             8,  8,   10000,  18000),
+    ('bumper',           'dent',             8, 16,    3000,   5000),
+    ('bumper',           'paint_chip',      12, 12,   18000,  18000),
+    ('bumper',           'crack',           12, 12,   18000,  18000),
+    -- Front windshield: только замена 5-10, 1 день
+    ('front_windshield', 'broken_glass',     8,  8,    5000,  10000),
+    -- Rear windshield: маппится как лобовое стекло
+    ('rear_windshield',  'broken_glass',     8,  8,    5000,  10000),
+    -- Side window: только замена 3, 1 день
+    ('side_window',      'broken_glass',     8,  8,    3000,   3000),
+    -- Headlight: только замена 3, 0.5 дня
+    ('headlight',        'broken_headlight', 4,  4,    3000,   3000)
 ON CONFLICT (part_type, damage_type) DO NOTHING;

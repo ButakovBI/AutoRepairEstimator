@@ -15,6 +15,9 @@ DAMAGE_COLORS: dict[str, tuple[int, int, int]] = {
     "crack": (0, 0, 255),
     "rust": (255, 165, 0),
     "paint_chip": (255, 255, 0),
+    "broken_glass": (0, 255, 255),
+    "flat_tire": (128, 0, 128),
+    "broken_headlight": (255, 105, 180),
 }
 DEFAULT_COLOR = (255, 0, 255)
 

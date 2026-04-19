@@ -30,6 +30,8 @@ class PostgresPricingRuleRepository:
             id=row["id"],
             part_type=PartType(row["part_type"]),
             damage_type=DamageType(row["damage_type"]),
-            labor_hours=row["labor_hours"],
-            labor_cost=row["labor_cost_rub"],
+            labor_hours_min=row["labor_hours_min"],
+            labor_hours_max=row["labor_hours_max"],
+            labor_cost_min=row["labor_cost_min_rub"],
+            labor_cost_max=row["labor_cost_max_rub"],
         )

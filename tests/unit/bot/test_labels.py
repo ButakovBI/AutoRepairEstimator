@@ -19,5 +19,5 @@ class TestDamageLabels:
             assert key == key.lower()
             assert " " not in key
 
-    def test_contains_at_least_four_types(self):
-        assert len(DAMAGE_LABELS) >= 4
+    def test_contains_at_least_eight_types(self):
+        assert len(DAMAGE_LABELS) >= 8

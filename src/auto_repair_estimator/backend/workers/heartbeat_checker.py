@@ -6,11 +6,9 @@ from uuid import uuid4
 
 from loguru import logger
 
-from auto_repair_estimator.backend.adapters.repositories.postgres_repair_request_repository import (
-    PostgresRepairRequestRepository,
-)
 from auto_repair_estimator.backend.domain.entities.outbox_event import OutboxEvent
 from auto_repair_estimator.backend.domain.interfaces.outbox_repository import OutboxRepository
+from auto_repair_estimator.backend.domain.interfaces.repair_request_repository import RepairRequestRepository
 from auto_repair_estimator.backend.domain.services.request_state_machine import RequestStateMachine
 from auto_repair_estimator.backend.domain.value_objects.request_enums import RequestStatus
 
@@ -18,7 +16,7 @@ from auto_repair_estimator.backend.domain.value_objects.request_enums import Req
 class HeartbeatChecker:
     def __init__(
         self,
-        request_repository: PostgresRepairRequestRepository,
+        request_repository: RepairRequestRepository,
         outbox_repository: OutboxRepository,
         state_machine: RequestStateMachine,
         notifications_topic: str,

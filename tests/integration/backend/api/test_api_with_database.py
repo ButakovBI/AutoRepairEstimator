@@ -92,6 +92,33 @@ async def test_photo_upload_transitions_ml_request_to_queued(api_client: AsyncCl
 
 
 @pytest.mark.anyio
+async def test_photo_upload_enqueues_outbox_inference_request(api_client: AsyncClient, db_pool: asyncpg.Pool) -> None:
+    """Photo upload must enqueue an ``inference_requests`` outbox event in the
+    same transaction so the ML worker eventually receives the job."""
+    # Arrange
+    request_id = await _create_ml_request(api_client)
+
+    # Act
+    await api_client.post(f"/v1/requests/{request_id}/photo", json={"image_key": "raw-images/test.jpg"})
+
+    # Assert — a single unpublished outbox row exists with matching payload
+    row = await db_pool.fetchrow(
+        """
+        SELECT topic, payload, aggregate_id
+        FROM outbox_events
+        WHERE aggregate_id = $1 AND topic = 'inference_requests'
+        """,
+        request_id,
+    )
+    assert row is not None
+    import json
+
+    payload = row["payload"] if isinstance(row["payload"], dict) else json.loads(row["payload"])
+    assert payload["request_id"] == request_id
+    assert payload["image_key"] == "raw-images/test.jpg"
+
+
+@pytest.mark.anyio
 async def test_photo_upload_rejected_for_manual_mode(api_client: AsyncClient) -> None:
     # Arrange
     request_id = await _create_manual_request(api_client)
@@ -115,8 +142,8 @@ async def test_confirm_pricing_transitions_request_to_done(api_client: AsyncClie
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "done"
-    assert "total_cost" in body
-    assert "total_hours" in body
+    for required_field in ("total_cost_min", "total_cost_max", "total_hours_min", "total_hours_max"):
+        assert required_field in body, f"missing pricing field: {required_field}"
 
     # Assert — database
     row = await db_pool.fetchrow("SELECT status FROM repair_requests WHERE id = $1", request_id)
@@ -203,7 +230,7 @@ async def test_get_request_returns_all_damages_with_correct_data(
     # Arrange
     request_id = await _create_manual_request(api_client)
     await api_client.post(
-        f"/v1/requests/{request_id}/damages", json={"part_type": "bumper_front", "damage_type": "dent"}
+        f"/v1/requests/{request_id}/damages", json={"part_type": "bumper", "damage_type": "dent"}
     )
     await api_client.post(f"/v1/requests/{request_id}/damages", json={"part_type": "hood", "damage_type": "scratch"})
 
@@ -216,15 +243,17 @@ async def test_get_request_returns_all_damages_with_correct_data(
     assert data["id"] == request_id
     assert len(data["damages"]) == 2
     part_types = {d["part_type"] for d in data["damages"]}
-    assert part_types == {"bumper_front", "hood"}
+    assert part_types == {"bumper", "hood"}
 
 
 @pytest.mark.anyio
 async def test_confirm_pricing_with_damages_uses_pricing_rules(api_client: AsyncClient, db_pool: asyncpg.Pool) -> None:
-    """Pricing is calculated from real pricing_rules table in the database."""
+    """Pricing is calculated from the real ``pricing_rules`` table in the
+    database, seeded from thesis tables 5 and 6."""
     # Arrange — a manual request with one known damage
     request_id = await _create_manual_request(api_client)
-    # hood + scratch = 1.5 h, 1200 RUB (see init.sql)
+    # Hood + scratch -> "Царапина (покраска)": 10-18 тыс. руб., 1 день (8 h).
+    # The exact numbers come from init.sql / thesis table 5 row "Капот".
     await api_client.post(f"/v1/requests/{request_id}/damages", json={"part_type": "hood", "damage_type": "scratch"})
 
     # Act
@@ -233,8 +262,10 @@ async def test_confirm_pricing_with_damages_uses_pricing_rules(api_client: Async
     # Assert — pricing reflects the rule from the seeded database
     assert resp.status_code == 200
     body = resp.json()
-    assert body["total_hours"] == pytest.approx(1.5)
-    assert body["total_cost"] == pytest.approx(1200.0)
+    assert body["total_cost_min"] == pytest.approx(10_000.0)
+    assert body["total_cost_max"] == pytest.approx(18_000.0)
+    assert body["total_hours_min"] == pytest.approx(8.0)
+    assert body["total_hours_max"] == pytest.approx(8.0)
     assert body["status"] == "done"
 
 

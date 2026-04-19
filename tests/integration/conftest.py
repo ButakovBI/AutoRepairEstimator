@@ -114,6 +114,7 @@ async def api_client(db_pool: asyncpg.Pool) -> AsyncClient:  # type: ignore[retu
     The app is built fresh for each test so app.state is isolated.
     """
     from auto_repair_estimator.backend.adapters.repositories.postgres_damage_repository import PostgresDamageRepository
+    from auto_repair_estimator.backend.adapters.repositories.postgres_outbox_repository import PostgresOutboxRepository
     from auto_repair_estimator.backend.adapters.repositories.postgres_pricing_rule_repository import (
         PostgresPricingRuleRepository,
     )
@@ -126,6 +127,7 @@ async def api_client(db_pool: asyncpg.Pool) -> AsyncClient:  # type: ignore[retu
     app.state.request_repo = PostgresRepairRequestRepository(db_pool)
     app.state.damage_repo = PostgresDamageRepository(db_pool)
     app.state.pricing_rule_repo = PostgresPricingRuleRepository(db_pool)
+    app.state.outbox_repo = PostgresOutboxRepository(db_pool)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client

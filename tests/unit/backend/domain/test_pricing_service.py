@@ -21,8 +21,23 @@ class InMemoryPricingRuleRepository:
         return list(self._rules.values())
 
 
-def _rule(part: PartType, damage: DamageType, hours: float, cost: float) -> PricingRule:
-    return PricingRule(id=1, part_type=part, damage_type=damage, labor_hours=hours, labor_cost=cost)
+def _rule(
+    part: PartType,
+    damage: DamageType,
+    hours_min: float,
+    hours_max: float,
+    cost_min: float,
+    cost_max: float,
+) -> PricingRule:
+    return PricingRule(
+        id=1,
+        part_type=part,
+        damage_type=damage,
+        labor_hours_min=hours_min,
+        labor_hours_max=hours_max,
+        labor_cost_min=cost_min,
+        labor_cost_max=cost_max,
+    )
 
 
 def _damage(part: PartType, damage: DamageType, deleted: bool = False) -> DetectedDamage:
@@ -36,74 +51,153 @@ def _damage(part: PartType, damage: DamageType, deleted: bool = False) -> Detect
     )
 
 
+# Table-5/6 upper bound for Hood × Dent is 30-35 tys. RUB / 2 days (16 h).
+# Using real thesis numbers instead of synthetic ones keeps the test meaningful
+# even after schema migrations.
+_HOOD_DENT_RULE = _rule(PartType.HOOD, DamageType.DENT, 16, 16, 30_000, 35_000)
+# Bumper × Dent: 3-5 tys. RUB, 1-2 days (8-16 h)
+_BUMPER_DENT_RULE = _rule(PartType.BUMPER, DamageType.DENT, 8, 16, 3_000, 5_000)
+
+
 @pytest.mark.anyio
-async def test_pricing_sums_active_damages() -> None:
-    repo = InMemoryPricingRuleRepository(
-        [
-            _rule(PartType.HOOD, DamageType.SCRATCH, 1.5, 1200.0),
-            _rule(PartType.BUMPER_FRONT, DamageType.DENT, 2.0, 1500.0),
-        ]
-    )
+async def test_pricing_sums_active_damages_min_and_max_separately() -> None:
+    """Two non-overlapping rules: totals must be element-wise sums."""
+    repo = InMemoryPricingRuleRepository([_HOOD_DENT_RULE, _BUMPER_DENT_RULE])
     service = PricingService(_rule_repository=repo)
     damages = [
-        _damage(PartType.HOOD, DamageType.SCRATCH),
-        _damage(PartType.BUMPER_FRONT, DamageType.DENT),
+        _damage(PartType.HOOD, DamageType.DENT),
+        _damage(PartType.BUMPER, DamageType.DENT),
     ]
+
     result = await service.calculate("req-1", damages)
 
-    assert result.total_cost == pytest.approx(2700.0)
-    assert result.total_hours == pytest.approx(3.5)
+    # cost: 30_000 + 3_000 .. 35_000 + 5_000
+    assert result.total_cost_min == pytest.approx(33_000.0)
+    assert result.total_cost_max == pytest.approx(40_000.0)
+    # hours: 16 + 8 .. 16 + 16
+    assert result.total_hours_min == pytest.approx(24.0)
+    assert result.total_hours_max == pytest.approx(32.0)
     assert len(result.breakdown) == 2
 
 
 @pytest.mark.anyio
 async def test_pricing_skips_deleted_damages() -> None:
-    repo = InMemoryPricingRuleRepository([_rule(PartType.HOOD, DamageType.SCRATCH, 1.5, 1200.0)])
+    repo = InMemoryPricingRuleRepository([_HOOD_DENT_RULE])
     service = PricingService(_rule_repository=repo)
     damages = [
-        _damage(PartType.HOOD, DamageType.SCRATCH),
-        _damage(PartType.HOOD, DamageType.SCRATCH, deleted=True),
+        _damage(PartType.HOOD, DamageType.DENT),
+        _damage(PartType.HOOD, DamageType.DENT, deleted=True),
     ]
+
     result = await service.calculate("req-1", damages)
 
-    assert result.total_cost == pytest.approx(1200.0)
-    assert result.total_hours == pytest.approx(1.5)
+    # Only the live damage contributes — otherwise we'd double-charge 60-70k.
+    assert result.total_cost_min == pytest.approx(30_000.0)
+    assert result.total_cost_max == pytest.approx(35_000.0)
     assert len(result.breakdown) == 1
 
 
 @pytest.mark.anyio
-async def test_pricing_empty_damages_returns_zero() -> None:
+async def test_pricing_empty_damages_returns_zero_range() -> None:
     repo = InMemoryPricingRuleRepository([])
     service = PricingService(_rule_repository=repo)
+
     result = await service.calculate("req-1", [])
 
-    assert result.total_cost == 0.0
-    assert result.total_hours == 0.0
+    assert result.total_cost_min == 0.0
+    assert result.total_cost_max == 0.0
+    assert result.total_hours_min == 0.0
+    assert result.total_hours_max == 0.0
     assert result.breakdown == []
+    assert result.notes == []
 
 
 @pytest.mark.anyio
-async def test_pricing_unknown_combination_is_skipped() -> None:
+async def test_pricing_unknown_combination_is_skipped_silently() -> None:
+    """``(roof, broken_glass)`` is not in the rate card — service must skip it
+    rather than raise, so a partially unknown set of damages still produces
+    an estimate for the known ones."""
     repo = InMemoryPricingRuleRepository([])
     service = PricingService(_rule_repository=repo)
-    damages = [_damage(PartType.HOOD, DamageType.SCRATCH)]
+    damages = [_damage(PartType.ROOF, DamageType.BROKEN_GLASS)]
+
     result = await service.calculate("req-1", damages)
 
-    assert result.total_cost == 0.0
-    assert result.total_hours == 0.0
+    assert result.total_cost_min == 0.0
+    assert result.total_cost_max == 0.0
     assert result.breakdown == []
 
 
 @pytest.mark.anyio
-async def test_pricing_breakdown_contains_correct_fields() -> None:
-    repo = InMemoryPricingRuleRepository([_rule(PartType.TRUNK, DamageType.RUST, 3.5, 3000.0)])
+async def test_breakdown_item_exposes_min_max_per_phase() -> None:
+    repo = InMemoryPricingRuleRepository([_BUMPER_DENT_RULE])
     service = PricingService(_rule_repository=repo)
-    damages = [_damage(PartType.TRUNK, DamageType.RUST)]
+    damages = [_damage(PartType.BUMPER, DamageType.DENT)]
+
     result = await service.calculate("req-1", damages)
 
     assert len(result.breakdown) == 1
     item = result.breakdown[0]
-    assert item["part_type"] == "trunk"
-    assert item["damage_type"] == "rust"
-    assert item["cost"] == pytest.approx(3000.0)
-    assert item["hours"] == pytest.approx(3.5)
+    assert item["part_type"] == "bumper"
+    assert item["damage_type"] == "dent"
+    assert item["cost_min"] == pytest.approx(3_000.0)
+    assert item["cost_max"] == pytest.approx(5_000.0)
+    assert item["hours_min"] == pytest.approx(8.0)
+    assert item["hours_max"] == pytest.approx(16.0)
+
+
+@pytest.mark.anyio
+async def test_wheel_damage_emits_tyre_shop_note_and_no_price() -> None:
+    """Wheel damage is explicitly out of the body shop's scope per §5 of the
+    requirements: no price row, just a routing hint."""
+    repo = InMemoryPricingRuleRepository([_BUMPER_DENT_RULE])
+    service = PricingService(_rule_repository=repo)
+    damages = [
+        _damage(PartType.WHEEL, DamageType.FLAT_TIRE),
+        _damage(PartType.BUMPER, DamageType.DENT),
+    ]
+
+    result = await service.calculate("req-1", damages)
+
+    # Only the bumper damage produced a price row.
+    assert len(result.breakdown) == 1
+    assert result.breakdown[0]["part_type"] == "bumper"
+    # Exactly one tyre-shop note regardless of how many wheel damages appear.
+    assert any("шиномонтаж" in n.lower() for n in result.notes)
+
+
+@pytest.mark.anyio
+async def test_multiple_wheel_damages_produce_single_tyre_shop_note() -> None:
+    repo = InMemoryPricingRuleRepository([])
+    service = PricingService(_rule_repository=repo)
+    damages = [
+        _damage(PartType.WHEEL, DamageType.FLAT_TIRE),
+        _damage(PartType.WHEEL, DamageType.DENT),
+    ]
+
+    result = await service.calculate("req-1", damages)
+
+    tyre_notes = [n for n in result.notes if "шиномонтаж" in n.lower()]
+    assert len(tyre_notes) == 1
+    assert result.breakdown == []
+
+
+@pytest.mark.anyio
+async def test_scratch_adds_polish_note_with_per_scratch_accounting() -> None:
+    scratch_rule = _rule(PartType.DOOR, DamageType.SCRATCH, 8, 8, 10_000, 18_000)
+    repo = InMemoryPricingRuleRepository([scratch_rule])
+    service = PricingService(_rule_repository=repo)
+    damages = [
+        _damage(PartType.DOOR, DamageType.SCRATCH),
+        _damage(PartType.DOOR, DamageType.SCRATCH),
+    ]
+
+    result = await service.calculate("req-1", damages)
+
+    # Both scratches priced at painting rates: 2 * (10k..18k) = 20k..36k.
+    assert result.total_cost_min == pytest.approx(20_000.0)
+    assert result.total_cost_max == pytest.approx(36_000.0)
+    polish_notes = [n for n in result.notes if "полировк" in n.lower()]
+    assert len(polish_notes) == 1
+    # Polish is 1000 RUB * 2 scratches = 2000.
+    assert "2" in polish_notes[0]

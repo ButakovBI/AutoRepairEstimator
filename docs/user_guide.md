@@ -17,6 +17,7 @@ Send `/start` to the bot. You will be asked to choose a mode:
 
 1. Choose **"С фотографией (ML)"**.
 2. Send a **clear, well-lit photo** where the damaged area is clearly visible and the part is recognizable.
+   - If you attach **several photos in one message**, the bot creates one inference request per photo and reports how many were accepted.
    - Supported formats: JPEG, PNG
    - Maximum size: 10 MB
    - Minimum resolution: 320×320 pixels
@@ -43,17 +44,19 @@ Send `/start` to the bot. You will be asked to choose a mode:
 
 ## Pricing
 
-Pricing is based on a fixed lookup table for the auto repair shop:
+Pricing reflects the auto repair shop's official rate card (thesis tables 5 & 6). Every damage is mapped to one of four work types and the corresponding cost/duration range is applied per part:
 
-| Damage Type | Approximate cost (RUB) | Approximate time |
-|-------------|----------------------|-----------------|
-| Scratch | 400–1 200 | 0.5–1.5 h |
-| Dent | 1 500–3 500 | 2–3.5 h |
-| Crack | 2 500–5 000 | 3–5 h |
-| Rust | 2 000–3 500 | 2.5–4 h |
-| Paint chip | 400–600 | 0.5 h |
+| Damage type → work type | How the shop prices it |
+|-------------------------|------------------------|
+| Scratch → painting | 10–18 тыс. руб., 1 day (polishing alternative: 1 h, 1 000 руб. — surfaced as a note) |
+| Rust → painting | same as scratch |
+| Dent → straightening + painting | 3–35 тыс. руб. and 1–3 days depending on the part |
+| Paint chip / Crack → part replacement | varies per part (e.g. door 20 тыс. руб./1.5–2 дня, roof 75–100 тыс. руб./5 дней) |
+| Broken glass → glass replacement | 3–10 тыс. руб., 1 day |
+| Broken headlight → headlight replacement | 3 тыс. руб., 0.5 day |
+| Flat tire / any wheel damage | Routed to a tyre shop — no body-shop estimate produced |
 
-Final estimate depends on the specific part and damage combination.
+The bot renders both **per-damage ranges** (e.g. *Дверь — вмятина: 23 000–30 000 руб. (16–24 ч)*) and the **aggregate range** over all active damages. A dedicated note is appended at the bottom of the estimate whenever polishing is a cheaper scratch alternative, or when the user should visit a tyre shop.
 
 ---
 

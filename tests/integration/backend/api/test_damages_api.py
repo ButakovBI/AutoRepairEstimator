@@ -108,7 +108,7 @@ async def test_get_request_includes_added_damages_in_response() -> None:
         request_id = await _create_manual_request(client)
         await client.post(
             f"/v1/requests/{request_id}/damages",
-            json={"part_type": "bumper_front", "damage_type": "dent"},
+            json={"part_type": "bumper", "damage_type": "dent"},
         )
 
         # Act
@@ -119,7 +119,7 @@ async def test_get_request_includes_added_damages_in_response() -> None:
         data = get_resp.json()
         assert data["id"] == request_id
         assert len(data["damages"]) == 1
-        assert data["damages"][0]["part_type"] == "bumper_front"
+        assert data["damages"][0]["part_type"] == "bumper"
 
 
 @mark.anyio
@@ -139,8 +139,15 @@ async def test_confirm_pricing_with_damage_returns_done_status() -> None:
         assert confirm_resp.status_code == 200
         data = confirm_resp.json()
         assert data["status"] == "done"
-        assert "total_cost" in data
-        assert "total_hours" in data
+        for required_field in (
+            "total_cost_min",
+            "total_cost_max",
+            "total_hours_min",
+            "total_hours_max",
+            "breakdown",
+            "notes",
+        ):
+            assert required_field in data, f"missing pricing field: {required_field}"
 
 
 @mark.anyio

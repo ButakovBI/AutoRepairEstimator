@@ -20,7 +20,13 @@ The system follows Clean Architecture with 3 services:
 | Bot | vkbottle 4.x | — |
 | ML Worker | YOLOv8-seg + Kafka | — |
 
-**Infrastructure**: PostgreSQL 16, Apache Kafka, MinIO S3, Nginx
+**Infrastructure**: PostgreSQL 16, Apache Kafka, MinIO S3.
+
+> **Why no Nginx?** The bot uses the VK Long Poll API (`vkbottle.run_polling`):
+> it initiates outbound HTTPS connections to VK and does not need to expose an
+> HTTP endpoint to receive webhooks, so a reverse proxy in front of the bot is
+> unnecessary. The backend is reached directly by internal services over the
+> Docker network.
 
 See the `.cursor/plans/` directory for detailed C4 diagrams and implementation plan.
 
@@ -82,11 +88,11 @@ Manual mode starts directly in PRICING state.
 
 ## ML Pipeline
 
-1. **Parts Detection** (YOLOv8-seg): Detect 12 car parts, confidence ≥ 0.7
-2. **Cropping**: Crop detected parts (excluding headlights)
-3. **Damage Detection** (YOLOv8-seg): Detect 5 damage types per crop
-4. **Composition**: Alpha-blend masks onto original image
-5. **Result**: Publish to Kafka `inference_results` topic
+1. **Parts Detection** (`yolov8m-seg`): 12 car parts (door, front/rear fender, trunk, hood, roof, headlight, front/rear windshield, side window, wheel, bumper), confidence ≥ 0.7.
+2. **Cropping**: crops every detected part; excluded parts are configurable via `MLWorkerConfig.crop_excluded_parts`.
+3. **Damage Detection** (`yolov8m-seg`): 8 damage types per crop (scratch, dent, paint_chip, rust, crack, broken_glass, flat_tire, broken_headlight).
+4. **Composition**: alpha-blend masks onto original image.
+5. **Result**: publish to Kafka `inference_results` topic.
 
 ### Training Models
 

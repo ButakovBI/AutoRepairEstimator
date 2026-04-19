@@ -39,10 +39,19 @@ class BackendClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def edit_damage(self, request_id: str, damage_id: str, damage_type: str) -> dict[str, Any]:
+    async def edit_damage(
+        self,
+        request_id: str,
+        damage_id: str,
+        damage_type: str,
+        part_type: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"damage_type": damage_type}
+        if part_type is not None:
+            payload["part_type"] = part_type
         resp = await self._client.patch(
             f"/v1/requests/{request_id}/damages/{damage_id}",
-            json={"damage_type": damage_type},
+            json=payload,
         )
         resp.raise_for_status()
         return resp.json()
