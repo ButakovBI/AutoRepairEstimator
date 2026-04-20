@@ -10,11 +10,17 @@ class BackendClient:
         self._base_url = base_url.rstrip("/")
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=30.0)
 
-    async def create_request(self, chat_id: int, user_id: int | None, mode: str) -> dict[str, Any]:
-        resp = await self._client.post(
-            "/v1/requests",
-            json={"chat_id": chat_id, "user_id": user_id, "mode": mode},
-        )
+    async def create_request(
+        self,
+        chat_id: int,
+        user_id: int | None,
+        mode: str,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"chat_id": chat_id, "user_id": user_id, "mode": mode}
+        if idempotency_key is not None:
+            body["idempotency_key"] = idempotency_key
+        resp = await self._client.post("/v1/requests", json=body)
         resp.raise_for_status()
         return resp.json()
 
@@ -28,6 +34,20 @@ class BackendClient:
 
     async def get_request(self, request_id: str) -> dict[str, Any]:
         resp = await self._client.get(f"/v1/requests/{request_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_active_request(self, chat_id: int) -> dict[str, Any] | None:
+        """Fetch the user's latest non-terminal session or ``None``.
+
+        A 404 from the backend is part of the contract — it means the user
+        has no active scenario — so we translate it to ``None`` rather than
+        bubbling an HTTPStatusError, which would force every caller to
+        duplicate the same ``try / except`` around a control-flow signal.
+        """
+        resp = await self._client.get("/v1/requests/active", params={"chat_id": chat_id})
+        if resp.status_code == 404:
+            return None
         resp.raise_for_status()
         return resp.json()
 
@@ -62,6 +82,19 @@ class BackendClient:
 
     async def confirm_pricing(self, request_id: str) -> dict[str, Any]:
         resp = await self._client.post(f"/v1/requests/{request_id}/confirm")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def abandon_request(self, request_id: str) -> dict[str, Any]:
+        """Explicitly mark a session as FAILED (``user_abandoned``).
+
+        The bot calls this whenever the user presses "Начать" or switches
+        modes while an older session is still non-terminal, so the two
+        never coexist. The endpoint is idempotent server-side: calling on
+        an already-terminal request returns ``was_already_terminal=True``
+        with 200, so callers don't need to branch on the current status.
+        """
+        resp = await self._client.post(f"/v1/requests/{request_id}/abandon")
         resp.raise_for_status()
         return resp.json()
 

@@ -304,6 +304,36 @@ async def test_failed_inference_enqueues_inference_failed_notification() -> None
     events = await outbox_repo.get_unpublished(10)
     assert len(events) == 1
     assert events[0].payload["type"] == "inference_failed"
+    # The worker's reason code must reach the bot unchanged so the
+    # failure message can be rendered with an actionable hint ("I didn't
+    # see a car — send a clearer photo") instead of a generic error.
+    assert events[0].payload["error_message"] == "no_parts_detected"
+
+
+@pytest.mark.anyio
+async def test_successful_inference_notification_omits_error_message() -> None:
+    # On the success branch no error_message should leak into the
+    # payload — consumers that branch on its presence rely on that.
+    req_repo = _FakeRequestRepo()
+    outbox_repo = _FakeOutboxRepo()
+    req_id = str(uuid4())
+    await req_repo.add(_make_processing_request(req_id))
+    use_case = _make_use_case(req_repo, _FakePartRepo(), _FakeDamageRepo(), outbox_repo)
+
+    await use_case.execute(
+        ProcessInferenceResultInput(
+            request_id=req_id,
+            status="success",
+            parts=[],
+            damages=[],
+            composited_image_key="composites/ok.jpg",
+            error_message=None,
+        )
+    )
+
+    events = await outbox_repo.get_unpublished(10)
+    assert events[0].payload["type"] == "inference_complete"
+    assert "error_message" not in events[0].payload
 
 
 # ---------------------------------------------------------------------------

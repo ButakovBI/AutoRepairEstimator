@@ -7,16 +7,62 @@ from vkbottle import API
 from vkbottle.bot import MessageEvent
 
 from auto_repair_estimator.bot.backend_client import BackendClient
+from auto_repair_estimator.bot.damage_list_format import format_damage_list
 from auto_repair_estimator.bot.keyboards.damage_edit import add_more_or_confirm_keyboard
 from auto_repair_estimator.bot.keyboards.damage_type_selection import damage_type_selection_keyboard
 from auto_repair_estimator.bot.labels import DAMAGE_LABELS, PART_LABELS
 from auto_repair_estimator.bot.part_selection_send import send_part_selection_messages
 
 
+async def _abandon_any_active_session(backend: BackendClient, chat_id: int) -> None:
+    """Atomically end whatever non-terminal session the chat currently has.
+
+    Mode-switch bug (#3 in the UX round): clicking "Ручной ввод" while an
+    ML session was mid-flight used to spawn a parallel RepairRequest,
+    leaving two non-terminal rows for the same ``chat_id`` and making
+    ``get_latest_active_by_chat_id`` return whichever was newest — so
+    subsequent buttons from the older session started mutating the newer
+    one by accident. Abandoning here collapses the invariant to "at most
+    one active session per chat" at every user-initiated entry point
+    (mode click and "Начать" press).
+    """
+
+    try:
+        active = await backend.get_active_request(chat_id)
+    except Exception as exc:
+        # Probe failure must not stop the user from creating a new request —
+        # worst case we briefly have two actives; the watchdog will clean
+        # the orphan up within 5 minutes.
+        logger.warning(
+            "Could not probe active request for chat_id={} before abandon: {}", chat_id, exc
+        )
+        return
+    if active is None:
+        return
+    try:
+        await backend.abandon_request(str(active.get("id")))
+    except Exception as exc:
+        logger.warning(
+            "abandon_request failed for chat_id={} rid={}: {}",
+            chat_id,
+            active.get("id"),
+            exc,
+        )
+
+
 async def handle_mode_selection(event: MessageEvent, payload: dict[str, Any], backend: BackendClient, api: API) -> None:
-    mode = payload["m"]
+    mode = payload.get("m")
     peer_id = event.peer_id
     user_id = event.user_id
+    if mode not in ("ml", "manual"):
+        logger.warning("handle_mode_selection received invalid payload: {}", payload)
+        await api.messages.send(peer_id=peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
+        return
+
+    # Picking a mode IS a session reset — if the user had an older ML or
+    # manual request still active (e.g. clicked an old mode-selection
+    # keyboard), close it before creating the new one.
+    await _abandon_any_active_session(backend, peer_id)
 
     try:
         data = await backend.create_request(chat_id=peer_id, user_id=user_id, mode=mode)
@@ -43,8 +89,12 @@ async def handle_mode_selection(event: MessageEvent, payload: dict[str, Any], ba
 
 
 async def handle_part_selection(event: MessageEvent, payload: dict[str, Any], backend: BackendClient, api: API) -> None:
-    part_type = payload["pt"]
-    request_id = payload["rid"]
+    part_type = payload.get("pt")
+    request_id = payload.get("rid")
+    if not part_type or not request_id:
+        logger.warning("handle_part_selection received malformed payload: {}", payload)
+        await api.messages.send(peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
+        return
     part_label = PART_LABELS.get(part_type, part_type)
 
     await api.messages.send(
@@ -58,9 +108,13 @@ async def handle_part_selection(event: MessageEvent, payload: dict[str, Any], ba
 async def handle_damage_type_selection(
     event: MessageEvent, payload: dict[str, Any], backend: BackendClient, api: API
 ) -> None:
-    request_id = payload["rid"]
-    part_type = payload["pt"]
-    damage_type = payload["dt"]
+    request_id = payload.get("rid")
+    part_type = payload.get("pt")
+    damage_type = payload.get("dt")
+    if not request_id or not part_type or not damage_type:
+        logger.warning("handle_damage_type_selection received malformed payload: {}", payload)
+        await api.messages.send(peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
+        return
 
     try:
         await backend.add_damage(request_id=request_id, part_type=part_type, damage_type=damage_type)
@@ -71,19 +125,76 @@ async def handle_damage_type_selection(
 
     part_label = PART_LABELS.get(part_type, part_type)
     damage_label = DAMAGE_LABELS.get(damage_type, damage_type)
+    # Re-read the full basket from the backend and embed it in the reply
+    # (bug #5). This is one extra round-trip per add, but it's the only
+    # way to keep the list accurate: the bot does not cache damages and
+    # any previous delete/edit could have changed the set. The cost is
+    # negligible compared to the VK send latency that dominates here.
+    running_list = await _running_damage_list_or_empty(backend, request_id)
     await api.messages.send(
         peer_id=event.peer_id,
-        message=f"Добавлено: {part_label} — {damage_label}",
+        message=f"Добавлено: {part_label} — {damage_label}\n\n{running_list}",
         keyboard=add_more_or_confirm_keyboard(request_id),
         random_id=0,
     )
 
 
+async def _running_damage_list_or_empty(backend: BackendClient, request_id: str) -> str:
+    """Return the formatted running list or a safe fallback on error.
+
+    A backend hiccup here must not block the "Добавить ещё / Подтвердить"
+    keyboard from reaching the user — the add already succeeded server-
+    side. We degrade to a terse placeholder in that case.
+    """
+
+    try:
+        data = await backend.get_request(request_id)
+    except Exception as exc:
+        logger.warning("Could not re-fetch damages for request {}: {}", request_id, exc)
+        return "Текущий список повреждений временно недоступен."
+    damages = data.get("damages", []) if isinstance(data, dict) else []
+    return format_damage_list(damages)
+
+
 async def handle_add_more(event: MessageEvent, payload: dict[str, Any], backend: BackendClient, api: API) -> None:
-    request_id = payload["rid"]
+    request_id = payload.get("rid")
+    if not request_id:
+        logger.warning("handle_add_more received malformed payload: {}", payload)
+        await api.messages.send(peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
+        return
     await send_part_selection_messages(
         api,
         event.peer_id,
         request_id,
         first_message="Выберите следующую повреждённую деталь:",
+    )
+
+
+async def handle_back_parts(
+    event: MessageEvent,
+    payload: dict[str, Any],
+    backend: BackendClient,  # noqa: ARG001 - uniform handler signature
+    api: API,
+) -> None:
+    """Re-present the part-selection keyboard.
+
+    Triggered from the "← К выбору детали" button on the damage-type
+    screen (bug #3). We don't undo the damage the user was about to add —
+    they haven't clicked a damage type yet, so there is nothing to undo.
+    """
+
+    request_id = payload.get("rid")
+    if not request_id:
+        logger.warning("handle_back_parts received malformed payload: {}", payload)
+        await api.messages.send(
+            peer_id=event.peer_id,
+            message="Некорректная кнопка. Нажмите «Начать», чтобы начать заново.",
+            random_id=0,
+        )
+        return
+    await send_part_selection_messages(
+        api,
+        event.peer_id,
+        str(request_id),
+        first_message="Выберите повреждённую деталь:",
     )

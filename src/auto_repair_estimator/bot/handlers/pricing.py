@@ -7,6 +7,7 @@ from vkbottle import API
 from vkbottle.bot import MessageEvent
 
 from auto_repair_estimator.bot.backend_client import BackendClient
+from auto_repair_estimator.bot.keyboards.start import start_keyboard
 from auto_repair_estimator.bot.labels import DAMAGE_LABELS, PART_LABELS
 
 
@@ -36,7 +37,19 @@ def _format_hours(min_h: float, max_h: float) -> str:
 
 
 async def handle_confirm(event: MessageEvent, payload: dict[str, Any], backend: BackendClient, api: API) -> None:
-    request_id = payload["rid"]
+    request_id = payload.get("rid")
+    # ``rid`` is expected to be a string UUID but we accept any truthy value
+    # defensively — if the backend rejects the shape, the generic error
+    # branch below will report it to the user instead of crashing the
+    # handler. Only None / empty string count as a malformed payload.
+    if not request_id:
+        logger.warning("handle_confirm received malformed payload: {}", payload)
+        await api.messages.send(
+            peer_id=event.peer_id,
+            message="Ошибка: некорректная кнопка. Напишите /start, чтобы начать заново.",
+            random_id=0,
+        )
+        return
 
     try:
         result = await backend.confirm_pricing(request_id)
@@ -86,5 +99,15 @@ async def handle_confirm(event: MessageEvent, payload: dict[str, Any], backend: 
         lines.append(note)
 
     lines.append("")
-    lines.append("Для нового запроса напишите /start или 'Начать'")
-    await api.messages.send(peer_id=event.peer_id, message="\n".join(lines), random_id=0)
+    lines.append("Чтобы оценить ещё одно повреждение, нажмите «Начать».")
+    # Attach the start-keyboard so the user has a one-tap escape to a new
+    # scenario — the previous "type /start" copy worked but forced the
+    # user to type, which is friction in VK chat (bug #1 in the UX
+    # round). The message is terminal (request is now DONE), so this is
+    # the only actionable affordance that still makes sense here.
+    await api.messages.send(
+        peer_id=event.peer_id,
+        message="\n".join(lines),
+        keyboard=start_keyboard(),
+        random_id=0,
+    )

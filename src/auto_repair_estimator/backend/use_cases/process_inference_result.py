@@ -20,6 +20,7 @@ from auto_repair_estimator.backend.domain.value_objects.request_enums import (
     DamageSource,
     DamageType,
     PartType,
+    RequestMode,
     RequestStatus,
 )
 
@@ -78,6 +79,28 @@ class ProcessInferenceResultUseCase:
                 "ProcessInferenceResult: request {} is in terminal/advanced state {}, ignoring duplicate",
                 data.request_id,
                 request.status.value,
+            )
+            return
+
+        # CREATED means the upload-photo step has not been run yet; the ML
+        # Worker could not possibly have produced a result for it. Accepting
+        # this message would use the MANUAL-only CREATED->PRICING edge, which
+        # is wrong for an ML request (it would skip QUEUED/PROCESSING).
+        if request.status is RequestStatus.CREATED:
+            logger.warning(
+                "ProcessInferenceResult: request {} is still CREATED — ignoring "
+                "stale/out-of-order inference_results message",
+                data.request_id,
+            )
+            return
+
+        # MANUAL requests never participate in the Kafka pipeline; a result
+        # for one is a cross-mode bug or a replay. Drop it so manual damages
+        # are not overwritten with ML predictions.
+        if request.mode is RequestMode.MANUAL:
+            logger.warning(
+                "ProcessInferenceResult: request {} is MANUAL mode — ignoring",
+                data.request_id,
             )
             return
 
@@ -165,6 +188,15 @@ class ProcessInferenceResultUseCase:
                 logger.warning("Skipping unknown damage_type={} or part_type={}: {}", d.damage_type, d.part_type, exc)
 
     async def _update_request_status(self, request: RepairRequest, data: ProcessInferenceResultInput) -> RepairRequest:
+        # Stamp the worker's ``error_message`` on the request on the
+        # failure branch so the reason is recoverable from the database
+        # alone (no need to cross-reference Kafka logs). On the success
+        # branch we intentionally leave the field empty — a prior
+        # failure on the same id should not linger after we successfully
+        # re-ran inference for a different photo.
+        failed_branch = data.status != "success"
+        error_code = "inference_failed" if failed_branch else None
+        error_message = data.error_message if failed_branch else None
         updated = RepairRequest(
             id=request.id,
             chat_id=request.chat_id,
@@ -176,6 +208,9 @@ class ProcessInferenceResultUseCase:
             timeout_at=request.timeout_at,
             original_image_key=request.original_image_key,
             composited_image_key=data.composited_image_key,
+            ml_error_code=error_code,
+            ml_error_message=error_message,
+            idempotency_key=request.idempotency_key,
         )
         priced = self._sm.transition(updated, RequestStatus.PRICING)
         await self._requests.update(priced)
@@ -192,6 +227,13 @@ class ProcessInferenceResultUseCase:
             "composited_image_key": data.composited_image_key,
             "damages": [{"damage_type": d.damage_type, "part_type": d.part_type} for d in data.damages],
         }
+        # For the failure branch the worker sends a short ``error_message``
+        # string ("no_parts_detected", "inference_failed", ...) — pipe it
+        # through to the bot so the user sees a specific hint instead of
+        # a generic "ML не справилось". On the success branch this field
+        # stays absent and the bot renders the damages list as before.
+        if not is_success and data.error_message:
+            payload["error_message"] = data.error_message
         event = OutboxEvent(
             id=str(uuid4()),
             aggregate_id=request.id,

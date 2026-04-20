@@ -42,6 +42,13 @@ def _make_api() -> AsyncMock:
 
 def _make_backend(**overrides) -> AsyncMock:
     backend = AsyncMock(spec=BackendClient)
+    # Default: no prior active session. ``handle_mode_selection`` now runs
+    # ``_abandon_any_active_session`` before creating a new request, so
+    # leaving the default MagicMock here would trigger an unawaited
+    # ``abandon_request`` coroutine (RuntimeWarning) in every legacy test
+    # that only cares about ``create_request``.
+    backend.get_active_request = AsyncMock(return_value=None)
+    backend.abandon_request = AsyncMock(return_value={"id": "x", "status": "failed"})
     for k, v in overrides.items():
         setattr(backend, k, AsyncMock(return_value=v))
     return backend
@@ -107,10 +114,15 @@ class TestHandlePhoto:
         )
         message.answer = AsyncMock()
         backend = AsyncMock(spec=BackendClient)
+        # Valid presigned URLs on both — bare ``None`` would now correctly
+        # abort the upload (see handle_photo's defensive guard) and the
+        # batching contract we want to prove here would be obscured by
+        # the error path. We test the "no presigned URL" behaviour in its
+        # own dedicated test.
         backend.create_request = AsyncMock(
             side_effect=[
-                {"id": "req-1", "presigned_put_url": None},
-                {"id": "req-2", "presigned_put_url": None},
+                {"id": "req-1", "presigned_put_url": "https://minio/put?a=1"},
+                {"id": "req-2", "presigned_put_url": "https://minio/put?a=2"},
             ]
         )
         backend.upload_photo = AsyncMock()
@@ -162,6 +174,41 @@ class TestHandlePhoto:
         assert puts, "presigned PUT must be called exactly once"
         assert puts[0].await_args.args[0] == "https://minio/put?sig=1"
 
+    async def test_missing_presigned_url_does_not_mark_upload_complete(self):
+        # When the backend response omits ``presigned_put_url`` we cannot
+        # put the bytes into MinIO; calling ``upload_photo`` anyway would
+        # enqueue an inference that will 404 on the image key and leave
+        # the request stuck in QUEUED until the watchdog kills it. The
+        # handler must abort instead — the user is told the upload
+        # failed, and the request row that was just created is simply
+        # abandoned by the user's next action.
+        message = MagicMock()
+        message.peer_id = 10
+        message.from_id = 20
+        message.get_photo_attachments = MagicMock(
+            return_value=[_make_photo_attachment("https://vk.test/a.jpg")]
+        )
+        message.answer = AsyncMock()
+        backend = _make_backend(
+            create_request={"id": "req-1", "presigned_put_url": None}
+        )
+        api = MagicMock()
+
+        with patch(
+            "auto_repair_estimator.bot.handlers.photo.httpx.AsyncClient",
+            _FakeHttpxAsyncClient,
+        ):
+            await handle_photo(message, backend, api)
+
+        # upload_photo never called (would otherwise enqueue an orphan
+        # inference) and the user sees the generic "не удалось" reply
+        # sent by the outer batch handler when all photos failed.
+        backend.upload_photo.assert_not_awaited()
+        assert any(
+            "Не удалось" in (call.args[0] if call.args else "")
+            for call in message.answer.await_args_list
+        )
+
 
 class TestHandleStart:
     async def test_sends_welcome_message_with_mode_keyboard(self):
@@ -210,12 +257,34 @@ class TestHandleModeSelection:
         event = _make_event()
         api = _make_api()
         backend = AsyncMock(spec=BackendClient)
+        backend.get_active_request = AsyncMock(return_value=None)
         backend.create_request = AsyncMock(side_effect=Exception("connection error"))
 
         await handle_mode_selection(event, {"m": "manual"}, backend, api)
 
         call_kwargs = api.messages.send.call_args.kwargs
         assert "ошибка" in call_kwargs["message"].lower()
+
+
+def _damage_payload_buttons(keyboard_json: str) -> list[dict]:
+    """Return only the buttons whose callback cmd is ``dmg``.
+
+    The damage-type screen now also carries a Back-to-parts button; the
+    tests below care exclusively about damage selection, so we filter
+    the navigation affordance out at the assertion boundary rather than
+    thread "5 + 1" and "1 + 1" magic counts through every case.
+    """
+
+    kb = json.loads(keyboard_json)
+    return [
+        b
+        for row in kb["buttons"]
+        for b in row
+        if (lambda raw: (json.loads(raw) if isinstance(raw, str) else raw))(
+            b["action"]["payload"]
+        ).get("cmd")
+        == "dmg"
+    ]
 
 
 class TestHandlePartSelection:
@@ -228,9 +297,26 @@ class TestHandlePartSelection:
 
         call_kwargs = api.messages.send.call_args.kwargs
         assert "Капот" in call_kwargs["message"]
-        keyboard = json.loads(call_kwargs["keyboard"])
-        all_btns = [b for row in keyboard["buttons"] for b in row]
-        assert len(all_btns) == 8
+        # hood is a body panel -> exactly 5 compatible damage types per
+        # PART_DAMAGE_COMPATIBILITY (scratch/dent/paint_chip/rust/crack);
+        # the Back-to-parts button is counted separately.
+        assert len(_damage_payload_buttons(call_kwargs["keyboard"])) == 5
+
+    async def test_headlight_shows_only_replacement_damage(self):
+        # Regression guard: before PART_DAMAGE_COMPATIBILITY, selecting
+        # headlight offered 8 damage types including impossibles like
+        # flat_tire. Now it must offer exactly "broken_headlight".
+        event = _make_event()
+        api = _make_api()
+        backend = _make_backend()
+
+        await handle_part_selection(event, {"rid": "req-1", "pt": "headlight"}, backend, api)
+
+        dmg_btns = _damage_payload_buttons(api.messages.send.call_args.kwargs["keyboard"])
+        assert len(dmg_btns) == 1
+        payload = dmg_btns[0]["action"]["payload"]
+        payload = json.loads(payload) if isinstance(payload, str) else payload
+        assert payload["dt"] == "broken_headlight"
 
 
 class TestHandleDamageTypeSelection:
@@ -298,12 +384,26 @@ class TestHandleEditAction:
     async def test_edit_type_sends_damage_type_keyboard(self):
         event = _make_event()
         api = _make_api()
-        backend = _make_backend()
+        # The handler now fetches the current damage basket so it can embed
+        # the full list above the edit-type keyboard (bug #5 fix). The mock
+        # must return a sensible payload or the "get damages" round-trip
+        # degrades to the "список временно недоступен" fallback copy.
+        backend = _make_backend(
+            get_request={
+                "id": "req-1",
+                "damages": [
+                    {"id": "d1", "part_type": "hood", "damage_type": "scratch", "is_deleted": False},
+                ],
+            }
+        )
 
         await handle_edit_action(event, {"a": "edit_type", "rid": "req-1", "did": "d1"}, backend, api)
 
         call_kwargs = api.messages.send.call_args.kwargs
         assert "тип повреждения" in call_kwargs["message"].lower()
+        # The running-list header must appear above the prompt so the user
+        # never has to scroll up to remember what else is in the basket.
+        assert "Капот" in call_kwargs["message"]
 
     async def test_delete_action_removes_damage_and_refreshes_list(self):
         event = _make_event()

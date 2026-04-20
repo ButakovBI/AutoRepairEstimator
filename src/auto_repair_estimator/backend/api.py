@@ -32,6 +32,8 @@ from auto_repair_estimator.backend.use_cases.manage_damages import (
     EditDamageUseCase,
 )
 from auto_repair_estimator.backend.use_cases.repair_requests import (
+    AbandonRequestInput,
+    AbandonRequestUseCase,
     ConfirmPricingInput,
     ConfirmPricingUseCase,
     CreateRepairRequestInput,
@@ -114,6 +116,13 @@ def get_confirm_pricing_use_case(
     return ConfirmPricingUseCase(repository=repo, state_machine=sm)
 
 
+def get_abandon_request_use_case(
+    repo: RepairRequestRepository = Depends(_request_repo),
+    sm: RequestStateMachine = Depends(_sm),
+) -> AbandonRequestUseCase:
+    return AbandonRequestUseCase(repository=repo, state_machine=sm)
+
+
 def get_add_damage_use_case(
     repo: RepairRequestRepository = Depends(_request_repo),
     dmg_repo: DamageRepository = Depends(_damage_repo),
@@ -123,14 +132,16 @@ def get_add_damage_use_case(
 
 def get_edit_damage_use_case(
     dmg_repo: DamageRepository = Depends(_damage_repo),
+    req_repo: RepairRequestRepository = Depends(_request_repo),
 ) -> EditDamageUseCase:
-    return EditDamageUseCase(damage_repository=dmg_repo)
+    return EditDamageUseCase(damage_repository=dmg_repo, request_repository=req_repo)
 
 
 def get_delete_damage_use_case(
     dmg_repo: DamageRepository = Depends(_damage_repo),
+    req_repo: RepairRequestRepository = Depends(_request_repo),
 ) -> DeleteDamageUseCase:
-    return DeleteDamageUseCase(damage_repository=dmg_repo)
+    return DeleteDamageUseCase(damage_repository=dmg_repo, request_repository=req_repo)
 
 
 def get_calculate_pricing_use_case(
@@ -152,6 +163,7 @@ class CreateRequestBody(BaseModel):
     chat_id: int
     user_id: int | None = None
     mode: RequestMode
+    idempotency_key: str | None = None
 
 
 class RequestResponse(BaseModel):
@@ -199,6 +211,35 @@ class PricingResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ActiveRequestResponse(BaseModel):
+    """Bot-facing summary of a user's latest non-terminal session."""
+
+    id: str
+    status: RequestStatus
+    mode: RequestMode
+    chat_id: int
+
+
+# IMPORTANT: this endpoint must be declared *before* ``/{request_id}``,
+# otherwise FastAPI greedily matches ``/active`` as a request_id path
+# parameter and routes every lookup into ``get_request`` (which then 404s).
+@router.get("/active", response_model=ActiveRequestResponse)
+async def get_active_request(
+    chat_id: int,
+    repo: RepairRequestRepository = Depends(_request_repo),
+) -> ActiveRequestResponse:
+    """Return the latest non-terminal request for ``chat_id`` or 404."""
+    request = await repo.get_latest_active_by_chat_id(chat_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail=f"No active request for chat_id={chat_id}")
+    return ActiveRequestResponse(
+        id=request.id,
+        status=request.status,
+        mode=request.mode,
+        chat_id=request.chat_id,
+    )
+
+
 @router.get("/{request_id}", response_model=dict)
 async def get_request(
     request_id: str,
@@ -238,6 +279,7 @@ async def create_request(
             chat_id=body.chat_id,
             user_id=body.user_id,
             mode=body.mode,
+            idempotency_key=body.idempotency_key,
         )
     )
 
@@ -311,6 +353,7 @@ async def edit_damage(
                 damage_id=damage_id,
                 damage_type=body.damage_type,
                 part_type=body.part_type,
+                request_id=request_id,
             )
         )
     except ValueError as exc:
@@ -328,9 +371,9 @@ async def delete_damage(
     use_case: DeleteDamageUseCase = Depends(get_delete_damage_use_case),
 ) -> None:
     try:
-        await use_case.execute(DeleteDamageInput(damage_id=damage_id))
+        await use_case.execute(DeleteDamageInput(damage_id=damage_id, request_id=request_id))
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{request_id}/confirm", response_model=PricingResponse)
@@ -353,6 +396,36 @@ async def confirm_pricing(
         total_hours_max=pricing_result.total_hours_max,
         breakdown=pricing_result.breakdown,
         notes=pricing_result.notes,
+    )
+
+
+class AbandonRequestResponse(BaseModel):
+    id: str
+    status: RequestStatus
+    was_already_terminal: bool
+
+
+@router.post("/{request_id}/abandon", response_model=AbandonRequestResponse)
+async def abandon_request(
+    request_id: str,
+    use_case: AbandonRequestUseCase = Depends(get_abandon_request_use_case),
+) -> AbandonRequestResponse:
+    """Transition a non-terminal request to FAILED with a user-abandon marker.
+
+    Idempotent — calling on an already-DONE/FAILED request returns the
+    current state with ``was_already_terminal=True`` instead of erroring.
+    The bot relies on this so it can always call ``abandon_request`` before
+    starting a new session for the same chat, without branching on the
+    existing status.
+    """
+    try:
+        result = await use_case.execute(AbandonRequestInput(request_id=request_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return AbandonRequestResponse(
+        id=result.request.id,
+        status=result.request.status,
+        was_already_terminal=result.was_terminal,
     )
 
 

@@ -4,7 +4,9 @@ This VK bot helps you estimate car repair costs by either uploading a photo of t
 
 ## Getting Started
 
-Send `/start` to the bot. You will be asked to choose a mode:
+Send `/start` to the bot **or** press the **«Начать»** button (the bot
+surfaces it automatically whenever you don't have an active scenario).
+You will be asked to choose a mode:
 
 | Mode | When to use |
 |------|-------------|
@@ -36,7 +38,11 @@ Send `/start` to the bot. You will be asked to choose a mode:
 
 1. Choose **"Ручной ввод"**.
 2. Select a **damaged part** from the keyboard (e.g., Hood / Bumper front / Door).
-3. Select the **type of damage** (Scratch / Dent / Crack / Rust / Paint chip).
+3. Select the **type of damage**. The list of types depends on the part:
+   - **Body panels** (door, fenders, trunk, hood, roof, bumper) — Scratch / Dent / Paint chip / Rust / Crack.
+   - **Glass** (windshields, side window) — Broken glass (the only failure mode the shop prices).
+   - **Headlight** — Broken headlight (the only priced option; scratches on a headlight are not offered).
+   - **Wheel** — Flat tire (routed to a tyre shop).
 4. The bot confirms the added damage and offers to add more or proceed.
 5. Press **"Подтвердить"** to get the estimate.
 
@@ -58,6 +64,30 @@ Pricing reflects the auto repair shop's official rate card (thesis tables 5 & 6)
 
 The bot renders both **per-damage ranges** (e.g. *Дверь — вмятина: 23 000–30 000 руб. (16–24 ч)*) and the **aggregate range** over all active damages. A dedicated note is appended at the bottom of the estimate whenever polishing is a cheaper scratch alternative, or when the user should visit a tyre shop.
 
+### How the bot aggregates damages into the estimate
+
+The list of detected damages shown to the user is always the full list
+(e.g. "Дверь — Царапина, Дверь — Царапина, Дверь — Трещина"), but the
+**priced total** applies two business rules before summing:
+
+1. **One occurrence per damage type per part.** Multiple damages of the
+   same type on the same physical part are charged as one — painting a
+   door covers every scratch on it, so 3 scratches on one door are
+   priced as 1 scratch.
+2. **Replacement supersedes other repairs on the same part.** If a part
+   has any replacement-class damage (crack, paint chip, broken glass,
+   broken headlight) alongside paint/dent damages, the part is priced
+   purely as replacement — you don't paint a panel you're replacing.
+
+Example matching the thesis spec:
+
+| Detected (displayed) | Priced as |
+|----------------------|-----------|
+| Дверь — 2 царапины + 2 трещины | Дверь — замена (1 row) |
+| Лобовое стекло — битое стекло | Стекло — замена |
+| Фара — разбитая фара | Фара — замена |
+| Переднее крыло — 2 вмятины + 3 царапины | Крыло — вмятина + Крыло — царапина (2 rows, no replacement) |
+
 ---
 
 ## Tips for Best Results
@@ -71,4 +101,49 @@ The bot renders both **per-damage ranges** (e.g. *Дверь — вмятина:
 
 ## Starting Over
 
-To start a new estimation session, send `/start` at any time.
+To start a new estimation session, send `/start` at any time, or press
+the **«Начать»** button that the bot attaches to onboarding / "out of
+session" replies.
+
+## What if I press an old button or write something random?
+
+The bot's scenarios live on server-side state. If your previous session
+has already finished (confirmed pricing, timed out) or a button you
+tap is from a completed request, the bot replies with
+*"Чтобы начать оценку ремонта, нажмите «Начать»"* and attaches the
+button. Free-text messages outside an active session get the same
+nudge — the only inputs that always start a new scenario are `/start`
+and sending a photo.
+
+---
+
+## Deploying Trained ML Models (operator note)
+
+The ML worker loads two YOLOv8-seg networks from `/app/models/` inside the
+container, which `docker/docker-compose.yml` maps to the host path
+`docker/models/`:
+
+| File on host | Loaded as | Produces |
+|--------------|-----------|----------|
+| `docker/models/parts.pt`   | parts segmentation | `PartType` detections on the full image |
+| `docker/models/damages.pt` | damage segmentation | `DamageType` detections on each cropped part |
+
+Class names inside the `.pt` file **must** match the enum values in
+`src/auto_repair_estimator/backend/domain/value_objects/request_enums.py`
+(see `docker/models/README.md`). On load the worker cross-checks
+`model.names` against those enums and logs warnings for any mismatch;
+unknown classes are also skipped at inference time so a mis-aligned model
+cannot poison downstream storage.
+
+To roll out a freshly trained checkpoint:
+
+```bash
+cp /path/to/runs/damages/weights/best.pt docker/models/damages.pt
+docker compose -f docker/docker-compose.yml restart ml_worker
+docker logs -f auto-repair-ml-worker    # watch for "model loaded" line
+```
+
+If the worker starts with only one model present (e.g. `damages.pt` is
+ready but `parts.pt` isn't trained yet), `ml_worker/main.py` skips loading
+the missing one — the worker still starts, but inference requests requiring
+that stage will fail fast with a structured error.

@@ -88,9 +88,9 @@ Manual mode starts directly in PRICING state.
 
 ## ML Pipeline
 
-1. **Parts Detection** (`yolov8m-seg`): 12 car parts (door, front/rear fender, trunk, hood, roof, headlight, front/rear windshield, side window, wheel, bumper), confidence ≥ 0.7.
+1. **Parts Detection** (`yolov8m-seg`): 12 car parts (door, front/rear fender, trunk, hood, roof, headlight, front/rear windshield, side window, wheel, bumper). Confidence cutoff is defined once in `backend/domain/value_objects/ml_thresholds.py` (currently 0.5) — see that module for the rationale; ops can override at runtime via `PARTS_CONFIDENCE_THRESHOLD`.
 2. **Cropping**: crops every detected part; excluded parts are configurable via `MLWorkerConfig.crop_excluded_parts`.
-3. **Damage Detection** (`yolov8m-seg`): 8 damage types per crop (scratch, dent, paint_chip, rust, crack, broken_glass, flat_tire, broken_headlight).
+3. **Damage Detection** (`yolov8m-seg`): 8 damage types per crop (scratch, dent, paint_chip, rust, crack, broken_glass, flat_tire, broken_headlight). Confidence cutoff also lives in `ml_thresholds.py` (currently 0.2, deliberately low so every likely damage appears in the user-facing list for confirmation); override at runtime with `DAMAGES_CONFIDENCE_THRESHOLD`.
 4. **Composition**: alpha-blend masks onto original image.
 5. **Result**: publish to Kafka `inference_results` topic.
 

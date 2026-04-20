@@ -140,6 +140,14 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       S3_ENDPOINT: http://minio:9000
+      # Confidence thresholds intentionally NOT pinned here.
+      # The single source of truth is
+      # src/auto_repair_estimator/backend/domain/value_objects/ml_thresholds.py;
+      # overriding them in two places silently de-syncs the ML worker
+      # from the rest of the business logic. Use PARTS_CONFIDENCE_THRESHOLD
+      # / DAMAGES_CONFIDENCE_THRESHOLD env vars only for one-off ops
+      # experiments, and revert by removing the env var — not by editing
+      # the value.
     volumes:
       - ./models:/app/models:ro
 

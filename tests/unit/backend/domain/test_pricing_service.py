@@ -183,21 +183,31 @@ async def test_multiple_wheel_damages_produce_single_tyre_shop_note() -> None:
 
 
 @pytest.mark.anyio
-async def test_scratch_adds_polish_note_with_per_scratch_accounting() -> None:
-    scratch_rule = _rule(PartType.DOOR, DamageType.SCRATCH, 8, 8, 10_000, 18_000)
-    repo = InMemoryPricingRuleRepository([scratch_rule])
+async def test_scratch_adds_polish_note_with_per_scratched_part_accounting() -> None:
+    """Two distinct parts each with a scratch → one polish line per part.
+
+    Under the aggregated-pricing contract, multiple scratches on the
+    *same* part collapse to one (a door is painted once regardless of
+    how many scratches it carries). The polish-note N therefore counts
+    scratched *parts*, not raw scratch detections. Two different parts
+    with scratches → N=2.
+    """
+
+    door_scratch = _rule(PartType.DOOR, DamageType.SCRATCH, 8, 8, 10_000, 18_000)
+    hood_scratch = _rule(PartType.HOOD, DamageType.SCRATCH, 8, 8, 10_000, 18_000)
+    repo = InMemoryPricingRuleRepository([door_scratch, hood_scratch])
     service = PricingService(_rule_repository=repo)
     damages = [
         _damage(PartType.DOOR, DamageType.SCRATCH),
-        _damage(PartType.DOOR, DamageType.SCRATCH),
+        _damage(PartType.HOOD, DamageType.SCRATCH),
     ]
 
     result = await service.calculate("req-1", damages)
 
-    # Both scratches priced at painting rates: 2 * (10k..18k) = 20k..36k.
+    # Two scratched parts × painting rate: 2 * (10k..18k) = 20k..36k.
     assert result.total_cost_min == pytest.approx(20_000.0)
     assert result.total_cost_max == pytest.approx(36_000.0)
     polish_notes = [n for n in result.notes if "полировк" in n.lower()]
     assert len(polish_notes) == 1
-    # Polish is 1000 RUB * 2 scratches = 2000.
+    # Polish is 1000 RUB * 2 scratched parts = 2000. "2" must appear in the text.
     assert "2" in polish_notes[0]

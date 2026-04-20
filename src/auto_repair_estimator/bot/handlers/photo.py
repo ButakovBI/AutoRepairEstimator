@@ -28,10 +28,31 @@ async def handle_photo(message: Message, backend: BackendClient, api: API) -> No
     peer_id = message.peer_id
     user_id = message.from_id
 
+    # VK's conversation_message_id is the most stable per-chat message
+    # identifier; combined with peer_id it forms a dedup key that survives
+    # Long Poll retransmissions without pulling in the full message_id
+    # (which changes on some edits).
+    base_message_id = (
+        getattr(message, "conversation_message_id", None)
+        or getattr(message, "id", None)
+        or 0
+    )
+
     success = 0
     for index, photo in enumerate(photos, start=1):
+        # Per-photo key — if the user sends the same N photos twice, each
+        # attachment position deduplicates independently.
+        idem_key = f"{peer_id}:{base_message_id}:{index}"
         try:
-            await _process_single_photo(message, backend, photo, peer_id=peer_id, user_id=user_id, index=index)
+            await _process_single_photo(
+                message,
+                backend,
+                photo,
+                peer_id=peer_id,
+                user_id=user_id,
+                index=index,
+                idempotency_key=idem_key,
+            )
             success += 1
         except Exception as exc:
             logger.error("Failed to process photo {}/{}: {}", index, total, exc)
@@ -58,8 +79,14 @@ async def _process_single_photo(
     peer_id: int,
     user_id: int,
     index: int,
+    idempotency_key: str | None = None,
 ) -> None:
-    data = await backend.create_request(chat_id=peer_id, user_id=user_id, mode="ml")
+    data = await backend.create_request(
+        chat_id=peer_id,
+        user_id=user_id,
+        mode="ml",
+        idempotency_key=idempotency_key,
+    )
     request_id = data["id"]
 
     sizes = getattr(photo, "sizes", None)
@@ -76,16 +103,27 @@ async def _process_single_photo(
     image_key = f"raw-images/{request_id}.jpg"
 
     presigned_url = data.get("presigned_put_url")
-    if presigned_url:
-        async with httpx.AsyncClient() as client:
-            upload_resp = await client.put(
-                presigned_url,
-                content=image_bytes,
-                headers={"Content-Type": "image/jpeg"},
-            )
-            upload_resp.raise_for_status()
-    else:
-        logger.warning("No presigned_put_url received for request_id={} (photo {})", request_id, index)
+    if not presigned_url:
+        # Without a presigned URL we cannot put the bytes into storage,
+        # which means ``upload_photo`` would enqueue an inference that
+        # can't possibly run (the worker would 404 on the image key) and
+        # leave the request stuck in QUEUED until the watchdog kills it.
+        # Better to surface a clean error to the user immediately than
+        # to corrupt the pipeline with half-uploaded requests.
+        logger.error(
+            "No presigned_put_url for request_id={} (photo {}); aborting upload",
+            request_id,
+            index,
+        )
+        raise RuntimeError("backend did not return a presigned_put_url")
+
+    async with httpx.AsyncClient() as client:
+        upload_resp = await client.put(
+            presigned_url,
+            content=image_bytes,
+            headers={"Content-Type": "image/jpeg"},
+        )
+        upload_resp.raise_for_status()
 
     await backend.upload_photo(request_id=request_id, image_key=image_key)
     logger.info("Uploaded photo {} for request_id={}", index, request_id)

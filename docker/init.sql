@@ -11,8 +11,20 @@ CREATE TABLE IF NOT EXISTS repair_requests (
     timeout_at TIMESTAMPTZ NOT NULL,
     original_image_key VARCHAR,
     composited_image_key VARCHAR,
+    ml_error_code VARCHAR,
+    ml_error_message VARCHAR,
     idempotency_key VARCHAR UNIQUE
 );
+
+-- Defensive-ish migration for upgrades of existing deployments: the
+-- initial schema did not carry these two columns, and without them the
+-- AbandonRequestUseCase and ProcessInferenceResultUseCase silently drop
+-- the user-visible reason for a failed/abandoned request on save.
+-- IF NOT EXISTS keeps this idempotent on fresh installs where the
+-- CREATE TABLE above already provisioned the columns.
+ALTER TABLE repair_requests
+    ADD COLUMN IF NOT EXISTS ml_error_code VARCHAR,
+    ADD COLUMN IF NOT EXISTS ml_error_message VARCHAR;
 
 CREATE INDEX IF NOT EXISTS idx_repair_requests_status_timeout
     ON repair_requests (status, timeout_at);

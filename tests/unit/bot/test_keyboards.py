@@ -89,21 +89,83 @@ class TestPartSelectionKeyboard:
             assert len(all_btns) <= VK_INLINE_MAX_BUTTONS
 
 
+def _damage_buttons(keyboard_json: str) -> list[dict]:
+    """Return only the damage-selection buttons (``cmd=dmg``).
+
+    The keyboard also carries a "← К выбору детали" back button that is
+    irrelevant to damage-compatibility assertions; filtering by cmd
+    keeps those tests focused on what they're actually verifying.
+    """
+
+    kb = _parse_keyboard(keyboard_json)
+    return [
+        btn
+        for row in kb["buttons"]
+        for btn in row
+        if _payload(btn).get("cmd") == "dmg"
+    ]
+
+
 class TestDamageTypeSelectionKeyboard:
-    def test_contains_eight_damage_types(self):
-        kb = _parse_keyboard(damage_type_selection_keyboard("req-1", "hood"))
-        all_buttons = [btn for row in kb["buttons"] for btn in row]
-        assert len(all_buttons) == 8
+    def test_body_part_shows_five_compatible_damage_types(self):
+        # Body panels (hood etc.) accept scratch, dent, paint_chip, rust, crack
+        # per PART_DAMAGE_COMPATIBILITY -- glass/wheel/headlight damage types
+        # must NOT be offered here because they can't be priced on a body panel.
+        dmg_btns = _damage_buttons(damage_type_selection_keyboard("req-1", "hood"))
+        dt_values = {_payload(b)["dt"] for b in dmg_btns}
+        assert dt_values == {"scratch", "dent", "paint_chip", "rust", "crack"}
+
+    def test_headlight_shows_only_broken_headlight(self):
+        # Headlight has exactly one priceable damage type: broken_headlight.
+        # Previously the UI exposed scratch/crack/etc. on headlights, creating
+        # entries that PricingService could only surface as "not priceable" notes.
+        dmg_btns = _damage_buttons(damage_type_selection_keyboard("req-1", "headlight"))
+        assert len(dmg_btns) == 1
+        assert _payload(dmg_btns[0])["dt"] == "broken_headlight"
+
+    def test_wheel_shows_only_flat_tire(self):
+        # Wheel damage routes to a tyre shop via TYRE_SHOP_NOTE; "flat_tire"
+        # is the single damage type the UI should surface for a wheel.
+        dmg_btns = _damage_buttons(damage_type_selection_keyboard("req-1", "wheel"))
+        assert len(dmg_btns) == 1
+        assert _payload(dmg_btns[0])["dt"] == "flat_tire"
+
+    def test_glass_parts_show_only_broken_glass(self):
+        # All three glass surfaces share identical compatibility.
+        for glass_part in ("front_windshield", "rear_windshield", "side_window"):
+            dmg_btns = _damage_buttons(damage_type_selection_keyboard("req-1", glass_part))
+            assert len(dmg_btns) == 1, f"{glass_part} should have exactly 1 damage type"
+            assert _payload(dmg_btns[0])["dt"] == "broken_glass"
 
     def test_button_payloads_include_part_type_and_damage_type(self):
-        kb = _parse_keyboard(damage_type_selection_keyboard("req-1", "hood"))
-        all_buttons = [btn for row in kb["buttons"] for btn in row]
-        for btn in all_buttons:
+        dmg_btns = _damage_buttons(damage_type_selection_keyboard("req-1", "hood"))
+        for btn in dmg_btns:
             p = _payload(btn)
             assert p["cmd"] == "dmg"
             assert p["rid"] == "req-1"
             assert p["pt"] == "hood"
             assert "dt" in p
+
+    def test_unknown_part_renders_no_damage_buttons(self):
+        # Unknown part_type (legacy/injected callback) must not crash the
+        # handler; we render zero damage buttons and let the backend reject
+        # whatever the client might post anyway. The Back affordance is
+        # still present so the user has a deterministic escape hatch.
+        kb_json = damage_type_selection_keyboard("req-1", "not_a_part")
+        assert _damage_buttons(kb_json) == []
+
+    def test_back_to_parts_button_is_always_present(self):
+        # Bug #3 (UX round): the damage-type screen is a dead end without a
+        # "back" button — the user has already committed to a part and there
+        # is no natural way to reconsider without scrolling up. The back
+        # button must be rendered for every part, including the 1-option
+        # screens (headlight/wheel/glass), so the escape hatch is uniform.
+        for part in ("hood", "headlight", "wheel", "front_windshield", "not_a_part"):
+            kb = _parse_keyboard(damage_type_selection_keyboard("req-1", part))
+            all_buttons = [b for row in kb["buttons"] for b in row]
+            back = [b for b in all_buttons if _payload(b).get("cmd") == "back_parts"]
+            assert len(back) == 1, f"{part}: expected one back_parts button"
+            assert _payload(back[0])["rid"] == "req-1"
 
 
 class TestInferenceResultKeyboard:
@@ -122,7 +184,10 @@ class TestInferenceResultKeyboard:
 
 
 class TestDamageEditKeyboard:
-    def test_shows_per_damage_edit_and_delete_buttons(self):
+    def test_shows_one_manage_button_per_damage(self):
+        # Each damage emits a single collapsed "manage" button (cmd=edit, a=edit_type);
+        # the per-damage Delete button was moved to the sub-keyboard so the main
+        # keyboard can fit up to 8 damages within VK's 10-button cap.
         damages = [
             {"id": "d1", "part_type": "hood", "damage_type": "scratch"},
             {"id": "d2", "part_type": "trunk", "damage_type": "dent"},
@@ -132,7 +197,7 @@ class TestDamageEditKeyboard:
         edit_btns = [b for b in all_buttons if _payload(b).get("a") == "edit_type"]
         delete_btns = [b for b in all_buttons if _payload(b).get("a") == "delete"]
         assert len(edit_btns) == 2
-        assert len(delete_btns) == 2
+        assert delete_btns == []
 
     def test_includes_add_more_and_confirm_buttons(self):
         kb = _parse_keyboard(damage_edit_keyboard("req-1", []))
@@ -143,15 +208,55 @@ class TestDamageEditKeyboard:
 
 
 class TestEditDamageTypeKeyboard:
-    def test_contains_all_eight_damage_types(self):
+    def test_legacy_call_without_part_shows_full_list_and_delete(self):
+        # Backwards-compat path: if a caller omits part_type (legacy payload
+        # that predates the pt-in-payload change) we degrade to the full
+        # 8-type list + delete rather than rendering an empty keyboard.
         kb = _parse_keyboard(edit_damage_type_keyboard("req-1", "d1"))
         all_buttons = [btn for row in kb["buttons"] for btn in row]
-        assert len(all_buttons) == 8
-        for btn in all_buttons:
+        type_btns = [b for b in all_buttons if _payload(b)["cmd"] == "edtype"]
+        delete_btns = [b for b in all_buttons if _payload(b).get("a") == "delete"]
+        assert len(type_btns) == 8
+        assert len(delete_btns) == 1
+
+    def test_filters_by_part_for_headlight(self):
+        # With a known part_type the sub-keyboard must mirror the forward
+        # selection keyboard's filter -- otherwise the user can "edit" a
+        # headlight damage into an incompatible type and get a 400 from the
+        # backend validator.
+        kb = _parse_keyboard(edit_damage_type_keyboard("req-1", "d1", "headlight"))
+        all_buttons = [btn for row in kb["buttons"] for btn in row]
+        type_btns = [b for b in all_buttons if _payload(b)["cmd"] == "edtype"]
+        assert len(type_btns) == 1
+        assert _payload(type_btns[0])["dt"] == "broken_headlight"
+
+    def test_filters_by_part_for_body_panel(self):
+        kb = _parse_keyboard(edit_damage_type_keyboard("req-1", "d1", "door"))
+        all_buttons = [btn for row in kb["buttons"] for btn in row]
+        type_btns = [b for b in all_buttons if _payload(b)["cmd"] == "edtype"]
+        dt_values = {_payload(b)["dt"] for b in type_btns}
+        assert dt_values == {"scratch", "dent", "paint_chip", "rust", "crack"}
+
+    def test_propagates_request_and_damage_ids(self):
+        kb = _parse_keyboard(edit_damage_type_keyboard("req-1", "d1", "hood"))
+        all_buttons = [btn for row in kb["buttons"] for btn in row]
+        type_btns = [b for b in all_buttons if _payload(b)["cmd"] == "edtype"]
+        for btn in type_btns:
             p = _payload(btn)
-            assert p["cmd"] == "edtype"
             assert p["rid"] == "req-1"
             assert p["did"] == "d1"
+
+
+class TestDamageEditKeyboardPropagatesPartType:
+    def test_edit_type_callback_carries_part_type(self):
+        # The manage button must carry `pt` so the sub-handler can render
+        # the part-specific edit keyboard without a backend round-trip.
+        damages = [{"id": "d1", "part_type": "wheel", "damage_type": "flat_tire"}]
+        kb = _parse_keyboard(damage_edit_keyboard("req-1", damages))
+        all_buttons = [btn for row in kb["buttons"] for btn in row]
+        manage_btns = [b for b in all_buttons if _payload(b).get("a") == "edit_type"]
+        assert len(manage_btns) == 1
+        assert _payload(manage_btns[0])["pt"] == "wheel"
 
 
 class TestAddMoreOrConfirmKeyboard:

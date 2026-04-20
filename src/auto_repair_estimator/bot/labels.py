@@ -1,25 +1,13 @@
-PART_LABELS: dict[str, str] = {
-    "door": "Дверь",
-    "front_fender": "Переднее крыло",
-    "rear_fender": "Заднее крыло",
-    "trunk": "Багажник",
-    "hood": "Капот",
-    "roof": "Крыша",
-    "headlight": "Фара",
-    "front_windshield": "Переднее стекло",
-    "rear_windshield": "Заднее стекло",
-    "side_window": "Боковое стекло",
-    "wheel": "Колесо",
-    "bumper": "Бампер",
-}
+"""Re-export of user-facing labels from the domain layer.
 
-DAMAGE_LABELS: dict[str, str] = {
-    "scratch": "Царапина",
-    "dent": "Вмятина",
-    "paint_chip": "Скол краски",
-    "rust": "Ржавчина",
-    "crack": "Трещина",
-    "broken_glass": "Разбитое стекло",
-    "flat_tire": "Спущенное колесо",
-    "broken_headlight": "Разбитая фара",
-}
+The canonical source is ``backend.domain.value_objects.labels``. This
+module stays as a thin re-export so existing bot imports keep working
+without a cross-cutting refactor.
+"""
+
+from auto_repair_estimator.backend.domain.value_objects.labels import (
+    DAMAGE_LABELS,
+    PART_LABELS,
+)
+
+__all__ = ["DAMAGE_LABELS", "PART_LABELS"]

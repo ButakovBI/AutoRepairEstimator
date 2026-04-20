@@ -96,11 +96,16 @@ async def test_timed_out_request_transitions_to_failed_and_emits_notification() 
     events = await outbox.get_unpublished(limit=10)
     assert len(events) == 1
     assert events[0].topic == "notifications"
-    assert events[0].payload == {
-        "chat_id": expired.chat_id,
-        "request_id": expired.id,
-        "type": "request_timeout",
-    }
+    # We only assert on keys the rest of the pipeline contracts with.
+    # The payload additionally carries ``request_created_at`` so the bot
+    # can show the user which of their requests timed out, but the exact
+    # ISO string is derived from the fake request and not part of this
+    # test's contract.
+    payload = events[0].payload
+    assert payload["chat_id"] == expired.chat_id
+    assert payload["request_id"] == expired.id
+    assert payload["type"] == "request_timeout"
+    assert "request_created_at" in payload
 
 
 @pytest.mark.anyio
