@@ -61,13 +61,13 @@ PARTS_CONFIDENCE_THRESHOLD: Final[float] = 0.5
 
 # ─── Damages: per-class thresholds — EDIT THESE NUMBERS ───────────────
 DAMAGES_CONFIDENCE_BY_CLASS: Final[Mapping[DamageType, float]] = {
-    DamageType.SCRATCH:          0.50,
-    DamageType.DENT:             0.25,
-    DamageType.PAINT_CHIP:       0.30,
-    DamageType.RUST:             0.30,
-    DamageType.CRACK:            0.25,
-    DamageType.BROKEN_GLASS:     0.50,
-    DamageType.FLAT_TIRE:        0.60,
+    DamageType.SCRATCH: 0.50,
+    DamageType.DENT: 0.25,
+    DamageType.PAINT_CHIP: 0.30,
+    DamageType.RUST: 0.30,
+    DamageType.CRACK: 0.25,
+    DamageType.BROKEN_GLASS: 0.50,
+    DamageType.FLAT_TIRE: 0.60,
     DamageType.BROKEN_HEADLIGHT: 0.40,
 }
 

@@ -55,10 +55,7 @@ def compose(original_image: Image.Image, damage_detections: list) -> bytes:  # t
         color_arr = np.array(color, dtype=np.float32)
 
         for c in range(3):
-            composite[:, :, c] = (
-                (1.0 - ALPHA * binary_mask) * composite[:, :, c]
-                + ALPHA * binary_mask * color_arr[c]
-            )
+            composite[:, :, c] = (1.0 - ALPHA * binary_mask) * composite[:, :, c] + ALPHA * binary_mask * color_arr[c]
         masks_applied += 1
 
     composite = np.clip(composite, 0, 255).astype(np.uint8)

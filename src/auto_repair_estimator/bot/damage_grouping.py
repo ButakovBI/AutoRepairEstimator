@@ -63,7 +63,4 @@ def group_damages(damages: Iterable[dict[str, Any]]) -> list[DamageGroup]:
             order.append(key)
         buckets[key].append(str(damage_id))
 
-    return [
-        DamageGroup(part_type=pt, damage_type=dt, damage_ids=tuple(buckets[(pt, dt)]))
-        for pt, dt in order
-    ]
+    return [DamageGroup(part_type=pt, damage_type=dt, damage_ids=tuple(buckets[(pt, dt)])) for pt, dt in order]

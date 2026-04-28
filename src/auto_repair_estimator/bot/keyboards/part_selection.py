@@ -23,6 +23,6 @@ def part_selection_keyboards_list(request_id: str) -> list[str]:
     items = list(PART_LABELS.items())
     keyboards: list[str] = []
     for offset in range(0, len(items), VK_INLINE_MAX_BUTTONS):
-        chunk = items[offset: offset + VK_INLINE_MAX_BUTTONS]
+        chunk = items[offset : offset + VK_INLINE_MAX_BUTTONS]
         keyboards.append(_keyboard_for_part_items(request_id, chunk))
     return keyboards

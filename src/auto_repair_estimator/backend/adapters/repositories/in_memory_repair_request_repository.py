@@ -16,9 +16,7 @@ class InMemoryRepairRequestRepository(RepairRequestRepository):
             # tests exercising dedup logic behave identically to production.
             for existing in self._items.values():
                 if existing.idempotency_key == request.idempotency_key:
-                    raise ValueError(
-                        f"duplicate idempotency_key={request.idempotency_key!r}"
-                    )
+                    raise ValueError(f"duplicate idempotency_key={request.idempotency_key!r}")
         self._items[request.id] = request
 
     async def get(self, request_id: str) -> RepairRequest | None:
@@ -44,10 +42,7 @@ class InMemoryRepairRequestRepository(RepairRequestRepository):
         # if a user opens a second session while the first is still idling,
         # the new one represents their current intent. We sort by
         # created_at DESC so the semantics match the Postgres query below.
-        active = [
-            r for r in self._items.values()
-            if r.chat_id == chat_id and r.status not in terminal
-        ]
+        active = [r for r in self._items.values() if r.chat_id == chat_id and r.status not in terminal]
         if not active:
             return None
         return max(active, key=lambda r: r.created_at)

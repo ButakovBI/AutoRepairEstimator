@@ -58,11 +58,7 @@ async def handle_photo(message: Message, backend: BackendClient, api: API) -> No
     # identifier; combined with peer_id it forms a dedup key that survives
     # Long Poll retransmissions without pulling in the full message_id
     # (which changes on some edits).
-    base_message_id = (
-        getattr(message, "conversation_message_id", None)
-        or getattr(message, "id", None)
-        or 0
-    )
+    base_message_id = getattr(message, "conversation_message_id", None) or getattr(message, "id", None) or 0
     # Index "1" is baked into the key so VK redeliveries of the exact
     # same message collapse to the same RepairRequest via idempotency,
     # while a genuinely new photo in a new VK message gets a fresh one.
@@ -81,15 +77,11 @@ async def handle_photo(message: Message, backend: BackendClient, api: API) -> No
         )
     except Exception as exc:
         logger.error("Failed to process photo: {}", exc)
-        await message.answer(
-            "Не удалось обработать фотографию. Попробуйте ещё раз "
-            "или используйте ручной ввод."
-        )
+        await message.answer("Не удалось обработать фотографию. Попробуйте ещё раз или используйте ручной ввод.")
         return
 
     await message.answer(
-        "Фотография получена. Запрос обрабатывается (~15 секунд).\n"
-        "Я пришлю результат, когда будет готово."
+        "Фотография получена. Запрос обрабатывается (~15 секунд).\nЯ пришлю результат, когда будет готово."
     )
 
 

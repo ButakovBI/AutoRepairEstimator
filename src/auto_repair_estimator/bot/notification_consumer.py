@@ -107,10 +107,7 @@ class NotificationConsumer:
                     "видно целиком, или укажите повреждения вручную:"
                 )
             else:
-                first_message = (
-                    "Не удалось обработать изображение автоматически. "
-                    "Укажите повреждения вручную:"
-                )
+                first_message = "Не удалось обработать изображение автоматически. Укажите повреждения вручную:"
             await send_part_selection_messages(
                 self._api,
                 peer_id,
@@ -123,10 +120,7 @@ class NotificationConsumer:
             # offer a zero-typing way to restart the whole flow.
             await self._api.messages.send(
                 peer_id=peer_id,
-                message=(
-                    "Если хотите прислать другое фото — нажмите «Начать» "
-                    "и выберите режим «С фотографией (ML)»."
-                ),
+                message=("Если хотите прислать другое фото — нажмите «Начать» и выберите режим «С фотографией (ML)»."),
                 keyboard=start_keyboard(),
                 random_id=0,
             )

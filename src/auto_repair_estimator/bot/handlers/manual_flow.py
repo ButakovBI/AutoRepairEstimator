@@ -21,7 +21,9 @@ async def handle_mode_selection(event: MessageEvent, payload: dict[str, Any], ba
     user_id = event.user_id
     if mode not in ("ml", "manual"):
         logger.warning("handle_mode_selection received invalid payload: {}", payload)
-        await api.messages.send(peer_id=peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
+        await api.messages.send(
+            peer_id=peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0
+        )
         return
 
     # Picking a mode IS a session reset — any non-terminal request the
@@ -61,7 +63,9 @@ async def handle_part_selection(event: MessageEvent, payload: dict[str, Any], ba
     request_id = payload.get("rid")
     if not part_type or not request_id:
         logger.warning("handle_part_selection received malformed payload: {}", payload)
-        await api.messages.send(peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
+        await api.messages.send(
+            peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0
+        )
         return
     part_label = PART_LABELS.get(part_type, part_type)
 
@@ -81,13 +85,13 @@ async def handle_damage_type_selection(
     damage_type = payload.get("dt")
     if not request_id or not part_type or not damage_type:
         logger.warning("handle_damage_type_selection received malformed payload: {}", payload)
-        await api.messages.send(peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
+        await api.messages.send(
+            peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0
+        )
         return
 
     try:
-        result = await backend.add_damage(
-            request_id=request_id, part_type=part_type, damage_type=damage_type
-        )
+        result = await backend.add_damage(request_id=request_id, part_type=part_type, damage_type=damage_type)
     except Exception as exc:
         logger.error("Failed to add damage: {}", exc)
         await api.messages.send(peer_id=event.peer_id, message="Ошибка при добавлении повреждения.", random_id=0)
@@ -142,7 +146,9 @@ async def handle_add_more(event: MessageEvent, payload: dict[str, Any], backend:
     request_id = payload.get("rid")
     if not request_id:
         logger.warning("handle_add_more received malformed payload: {}", payload)
-        await api.messages.send(peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
+        await api.messages.send(
+            peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0
+        )
         return
     await send_part_selection_messages(
         api,

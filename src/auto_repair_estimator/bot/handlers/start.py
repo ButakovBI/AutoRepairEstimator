@@ -26,9 +26,7 @@ WELCOME_TEXT = (
 # free-text "hello", a stale button from an expired session, a retry of a
 # terminal callback. Kept as a module constant so every call site renders
 # exactly the same wording (QA relies on this for contract assertions).
-NO_ACTIVE_SESSION_TEXT = (
-    "Чтобы начать оценку ремонта, нажмите кнопку «Начать»."
-)
+NO_ACTIVE_SESSION_TEXT = "Чтобы начать оценку ремонта, нажмите кнопку «Начать»."
 
 
 # Nudge texts for the "user has an active session but typed/did something
@@ -43,8 +41,7 @@ _NUDGE_MANUAL_WAITING_FOR_INPUT = (
     "открыть новую заявку."
 )
 _NUDGE_ML_AWAITING_PHOTO = (
-    "Жду фотографию повреждения автомобиля. Пришлите её сообщением или "
-    "нажмите «Начать», чтобы открыть новую заявку."
+    "Жду фотографию повреждения автомобиля. Пришлите её сообщением или нажмите «Начать», чтобы открыть новую заявку."
 )
 _NUDGE_ML_PROCESSING = (
     "Ваш снимок уже обрабатывается — я пришлю результат, как только "

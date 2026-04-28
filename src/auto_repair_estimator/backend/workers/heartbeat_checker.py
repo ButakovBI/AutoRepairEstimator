@@ -63,8 +63,7 @@ class HeartbeatChecker:
                 fresh = await self._requests.get(request.id)
                 if fresh is None:
                     logger.debug(
-                        "Request id={} vanished between batch fetch and timeout"
-                        " processing; skipping",
+                        "Request id={} vanished between batch fetch and timeout processing; skipping",
                         request.id,
                     )
                     continue

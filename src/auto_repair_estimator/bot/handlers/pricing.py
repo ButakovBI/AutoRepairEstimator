@@ -69,12 +69,8 @@ async def handle_confirm(event: MessageEvent, payload: dict[str, Any], backend: 
 
     lines: list[str] = []
     if breakdown:
-        lines.append(
-            f"Стоимость ремонта: {_format_range(total_cost_min, total_cost_max, suffix='руб.')}"
-        )
-        lines.append(
-            f"Приблизительное время: {_format_hours(total_hours_min, total_hours_max)}"
-        )
+        lines.append(f"Стоимость ремонта: {_format_range(total_cost_min, total_cost_max, suffix='руб.')}")
+        lines.append(f"Приблизительное время: {_format_hours(total_hours_min, total_hours_max)}")
         lines.append("")
         lines.append("Детализация:")
         for item in breakdown:
@@ -97,12 +93,8 @@ async def handle_confirm(event: MessageEvent, payload: dict[str, Any], backend: 
             # ``PricingService.calculate``. Anything non-replacement
             # falls through without a suffix: the price range is
             # self-explanatory for painting / dent work.
-            treatment_suffix = (
-                " — замена" if item.get("treatment") == "replacement" else ""
-            )
-            lines.append(
-                f"  - {part_label} — {damage_label}{treatment_suffix}: {cost} ({hours})"
-            )
+            treatment_suffix = " — замена" if item.get("treatment") == "replacement" else ""
+            lines.append(f"  - {part_label} — {damage_label}{treatment_suffix}: {cost} ({hours})")
     else:
         # All damages were routed to a tyre shop / had no rule: just show notes.
         lines.append("Кузовной ремонт по этой заявке не требуется.")

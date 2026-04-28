@@ -225,8 +225,7 @@ class DamageDetector:
             )
         if dropped_incompatible:
             logger.info(
-                "DamageDetector[request={} crop={} part={}] dropped {} incompatible detections "
-                "(allowed={})",
+                "DamageDetector[request={} crop={} part={}] dropped {} incompatible detections (allowed={})",
                 request_id,
                 crop_index,
                 part_type,
@@ -236,8 +235,7 @@ class DamageDetector:
 
         summary = sorted(raw_tally, key=lambda entry: -entry[1])
         summary_str = (
-            ", ".join(f"{cls}@{conf:.2f}/cut@{cut:.2f}:{verdict}" for cls, conf, cut, verdict in summary)
-            or "<none>"
+            ", ".join(f"{cls}@{conf:.2f}/cut@{cut:.2f}:{verdict}" for cls, conf, cut, verdict in summary) or "<none>"
         )
         logger.info(
             "DamageDetector[request={} crop={} part={}] raw={} accepted={} floor={:.2f} | {}",

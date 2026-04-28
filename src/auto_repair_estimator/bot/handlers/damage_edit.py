@@ -119,7 +119,9 @@ async def handle_edit_action(event: MessageEvent, payload: dict[str, Any], backe
     request_id = payload.get("rid")
     if not action or not request_id:
         logger.warning("handle_edit_action received malformed payload: {}", payload)
-        await api.messages.send(peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
+        await api.messages.send(
+            peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0
+        )
         return
     damage_id = payload.get("did", "")
 
@@ -176,7 +178,9 @@ async def handle_edit_damage_type(
     damage_type = payload.get("dt")
     if not request_id or not damage_id or not damage_type:
         logger.warning("handle_edit_damage_type received malformed payload: {}", payload)
-        await api.messages.send(peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
+        await api.messages.send(
+            peer_id=event.peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0
+        )
         return
 
     try:
@@ -234,9 +238,7 @@ async def handle_back_edit(
     await _send_edit_screen(api, event.peer_id, rid, active_damages)
 
 
-async def handle_group_action(
-    event: MessageEvent, payload: dict[str, Any], backend: BackendClient, api: API
-) -> None:
+async def handle_group_action(event: MessageEvent, payload: dict[str, Any], backend: BackendClient, api: API) -> None:
     """Entry point for the ``grp`` callback family (grouped damage edits).
 
     Dispatches the five group actions wired from ``damage_edit`` and
@@ -378,16 +380,12 @@ async def handle_group_action(
     )
 
 
-async def _count_group_members(
-    backend: BackendClient, request_id: str, part_type: str, damage_type: str
-) -> int:
+async def _count_group_members(backend: BackendClient, request_id: str, part_type: str, damage_type: str) -> int:
     ids = await _resolve_group_ids(backend, request_id, part_type, damage_type)
     return len(ids)
 
 
-async def _resolve_group_ids(
-    backend: BackendClient, request_id: str, part_type: str, damage_type: str
-) -> list[str]:
+async def _resolve_group_ids(backend: BackendClient, request_id: str, part_type: str, damage_type: str) -> list[str]:
     """Return the damage ids for a ``(part, damage_type)`` group as of now.
 
     Always fetches fresh: ``(rid, pt, dt)`` is the only group identity we
@@ -429,9 +427,7 @@ async def _refetch_and_send_edit_screen(
     await _send_edit_screen(api, peer_id, request_id, active, first_header=header)
 
 
-async def _send_group_vanished_and_refresh(
-    api: API, peer_id: int, request_id: str, backend: BackendClient
-) -> None:
+async def _send_group_vanished_and_refresh(api: API, peer_id: int, request_id: str, backend: BackendClient) -> None:
     """Fallback for when a group's members are gone by the time we look.
 
     Possible whenever a user pressed two group buttons in quick
@@ -448,9 +444,7 @@ async def _send_group_vanished_and_refresh(
     await _refetch_and_send_edit_screen(api, peer_id, request_id, backend, header=EDIT_HEADER)
 
 
-async def _format_current_damage_list(
-    backend: BackendClient, request_id: str
-) -> str:
+async def _format_current_damage_list(backend: BackendClient, request_id: str) -> str:
     """Fetch active damages and render them as a numbered list string.
 
     Isolated helper so the edit-type entry point can reuse the same
@@ -461,9 +455,7 @@ async def _format_current_damage_list(
     try:
         data = await backend.get_request(request_id)
     except Exception as exc:
-        logger.warning(
-            "Could not refetch damages for edit header rid={}: {}", request_id, exc
-        )
+        logger.warning("Could not refetch damages for edit header rid={}: {}", request_id, exc)
         return "Текущий список повреждений временно недоступен."
     active = [d for d in data.get("damages", []) if not d.get("is_deleted", False)]
     return format_damage_list(active, header="Текущие повреждения:")

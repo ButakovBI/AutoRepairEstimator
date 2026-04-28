@@ -64,15 +64,10 @@ def _ensure_compatible(part_type: PartType, damage_type: DamageType) -> None:
     older keyboard versions, direct API clients and replayed payloads.
     """
     if not is_compatible_pair(part_type, damage_type):
-        raise ValueError(
-            f"damage_type={damage_type.value} is not compatible with "
-            f"part_type={part_type.value}"
-        )
+        raise ValueError(f"damage_type={damage_type.value} is not compatible with part_type={part_type.value}")
 
 
-async def _extend_timeout(
-    requests: RepairRequestRepository, request: RepairRequest
-) -> None:
+async def _extend_timeout(requests: RepairRequestRepository, request: RepairRequest) -> None:
     """Push ``timeout_at`` forward to keep the session alive for another window."""
     extended = request.with_extended_timeout(datetime.now(UTC) + _TIMEOUT_EXTENSION)
     await requests.update(extended)
@@ -120,9 +115,7 @@ class AddDamageUseCase:
         # contract. Idempotent response keeps the handler logic simple
         # (always a DamageResponse, no 409 branching) — the caller
         # surfaces the ``already_existed`` flag as a soft info message.
-        existing = await self._find_existing_active(
-            data.request_id, data.part_type, data.damage_type
-        )
+        existing = await self._find_existing_active(data.request_id, data.part_type, data.damage_type)
         if existing is not None:
             await _extend_timeout(self._requests, request)
             logger.info(
@@ -277,10 +270,7 @@ class EditDamageUseCase:
         for sibling in siblings:
             if sibling.id == edited.id or sibling.is_deleted:
                 continue
-            if (
-                sibling.part_type is edited.part_type
-                and sibling.damage_type is edited.damage_type
-            ):
+            if sibling.part_type is edited.part_type and sibling.damage_type is edited.damage_type:
                 await self._damages.soft_delete(sibling.id)
                 logger.info(
                     "Merged duplicate damage id={} into edited id={} on pair=({}, {})",

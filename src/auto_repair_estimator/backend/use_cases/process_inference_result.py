@@ -126,9 +126,7 @@ class ProcessInferenceResultUseCase:
                 # and desync from what the edit screen will show.
                 existing_damages = await self._damages.get_by_request_id(data.request_id)
                 replayed_pairs = [
-                    (d.part_type.value, d.damage_type.value)
-                    for d in existing_damages
-                    if not d.is_deleted
+                    (d.part_type.value, d.damage_type.value) for d in existing_damages if not d.is_deleted
                 ]
                 updated_request = await self._update_request_status(request, data)
                 await self._create_notification_event(
@@ -159,9 +157,7 @@ class ProcessInferenceResultUseCase:
         # change the notification echoed the raw detector output (26
         # "Бампер — Царапина" from a single scratched bumper), which both
         # spammed the chat and desynced from the edit screen.
-        await self._create_notification_event(
-            updated_request, data, is_success, persisted_damage_pairs
-        )
+        await self._create_notification_event(updated_request, data, is_success, persisted_damage_pairs)
 
         logger.info(
             "Processed inference result for request={} status={} parts={} damages={}",
@@ -253,8 +249,7 @@ class ProcessInferenceResultUseCase:
 
         if duplicates_dropped:
             logger.info(
-                "ProcessInferenceResult: collapsed {} duplicate (part, damage) "
-                "pairs for request={} before persistence",
+                "ProcessInferenceResult: collapsed {} duplicate (part, damage) pairs for request={} before persistence",
                 duplicates_dropped,
                 data.request_id,
             )
@@ -302,15 +297,9 @@ class ProcessInferenceResultUseCase:
         # detector output on the failure branch (no persistence happened
         # there) so we still have something for the bot to log.
         if persisted_damage_pairs is not None:
-            notification_damages = [
-                {"damage_type": dt, "part_type": pt}
-                for pt, dt in persisted_damage_pairs
-            ]
+            notification_damages = [{"damage_type": dt, "part_type": pt} for pt, dt in persisted_damage_pairs]
         else:
-            notification_damages = [
-                {"damage_type": d.damage_type, "part_type": d.part_type}
-                for d in data.damages
-            ]
+            notification_damages = [{"damage_type": d.damage_type, "part_type": d.part_type} for d in data.damages]
         payload: dict[str, Any] = {
             "chat_id": request.chat_id,
             "request_id": request.id,

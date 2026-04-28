@@ -42,11 +42,7 @@ def format_damage_list(
 
     lines: list[str] = [header]
     for index, damage in enumerate(active, 1):
-        part_label = PART_LABELS.get(
-            damage.get("part_type", ""), damage.get("part_type", "?")
-        )
-        damage_label = DAMAGE_LABELS.get(
-            damage.get("damage_type", ""), damage.get("damage_type", "?")
-        )
+        part_label = PART_LABELS.get(damage.get("part_type", ""), damage.get("part_type", "?"))
+        damage_label = DAMAGE_LABELS.get(damage.get("damage_type", ""), damage.get("damage_type", "?"))
         lines.append(f"{index}. {part_label} — {damage_label}")
     return "\n".join(lines)

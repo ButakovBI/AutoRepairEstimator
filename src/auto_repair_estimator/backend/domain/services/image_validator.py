@@ -49,13 +49,9 @@ def validate_image_bytes(data: bytes) -> ImageMetadata:
         raise ValueError(f"image cannot be decoded: {exc}") from exc
 
     if img_format not in SUPPORTED_FORMATS:
-        raise ValueError(
-            f"unsupported image format: {img_format!r} (supported: {sorted(SUPPORTED_FORMATS)})"
-        )
+        raise ValueError(f"unsupported image format: {img_format!r} (supported: {sorted(SUPPORTED_FORMATS)})")
 
     if min(width, height) < MIN_SIDE_PX:
-        raise ValueError(
-            f"image too small: {width}x{height} (min {MIN_SIDE_PX}px on shorter side)"
-        )
+        raise ValueError(f"image too small: {width}x{height} (min {MIN_SIDE_PX}px on shorter side)")
 
     return ImageMetadata(format=img_format, width=width, height=height, size_bytes=size)

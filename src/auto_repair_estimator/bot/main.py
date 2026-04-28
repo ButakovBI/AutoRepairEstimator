@@ -66,9 +66,7 @@ CALLBACK_HANDLERS: dict[str, Any] = {
 CMDS_REQUIRING_ACTIVE_RID: frozenset[str] = frozenset(
     {"part", "dmg", "edit", "edtype", "grp", "confirm", "addmore", "back_parts", "back_edit"}
 )
-CMDS_REQUIRING_PRICING_STATUS: frozenset[str] = frozenset(
-    {"part", "dmg", "addmore", "back_parts"}
-)
+CMDS_REQUIRING_PRICING_STATUS: frozenset[str] = frozenset({"part", "dmg", "addmore", "back_parts"})
 
 
 async def handle_incoming_message(
@@ -102,9 +100,7 @@ async def handle_incoming_message(
     try:
         active = await backend.get_active_request(message.peer_id)
     except Exception as exc:
-        logger.warning(
-            "Could not probe active request for peer_id={}: {}", message.peer_id, exc
-        )
+        logger.warning("Could not probe active request for peer_id={}: {}", message.peer_id, exc)
         active = None
 
     if active is None:
@@ -141,7 +137,9 @@ async def validate_active_rid_for_callback(
     except Exception as exc:
         logger.warning(
             "Active-request probe failed for peer_id={} rid={} err={}",
-            peer_id, rid, exc,
+            peer_id,
+            rid,
+            exc,
         )
         await send_no_active_session_reply(api, peer_id)
         return False
@@ -152,7 +150,9 @@ async def validate_active_rid_for_callback(
     if str(active.get("id")) != str(rid):
         logger.info(
             "Rejecting stale callback cmd={} payload_rid={} active_rid={}",
-            cmd, rid, active.get("id"),
+            cmd,
+            rid,
+            active.get("id"),
         )
         await send_no_active_session_reply(api, peer_id)
         return False
@@ -160,9 +160,7 @@ async def validate_active_rid_for_callback(
     status = (active.get("status") or "").lower()
     if cmd in CMDS_REQUIRING_PRICING_STATUS and status != "pricing":
         text = active_session_nudge(active.get("mode"), active.get("status"))
-        await api.messages.send(
-            peer_id=peer_id, message=text, keyboard=start_keyboard(), random_id=0
-        )
+        await api.messages.send(peer_id=peer_id, message=text, keyboard=start_keyboard(), random_id=0)
         return False
     return True
 

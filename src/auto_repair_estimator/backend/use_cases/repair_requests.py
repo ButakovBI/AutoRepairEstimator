@@ -139,7 +139,9 @@ class UploadPhotoUseCase:
             await self._repository.update(request)
             raise
 
-        logger.info("Uploaded photo for request id={} image_key={} -> outbox inference_requests", queued.id, data.image_key)
+        logger.info(
+            "Uploaded photo for request id={} image_key={} -> outbox inference_requests", queued.id, data.image_key
+        )
         return UploadPhotoResult(request=queued)
 
 

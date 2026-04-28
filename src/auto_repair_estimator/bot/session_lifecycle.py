@@ -40,9 +40,7 @@ from auto_repair_estimator.bot.backend_client import BackendClient
 PREVIOUS_REQUEST_ABANDONED_NOTICE = "Предыдущая заявка закрыта."
 
 
-async def abandon_active_session(
-    backend: BackendClient, chat_id: int
-) -> dict[str, Any] | None:
+async def abandon_active_session(backend: BackendClient, chat_id: int) -> dict[str, Any] | None:
     """Close whatever non-terminal session the chat currently has.
 
     Returns the abandoned session's dict (as the backend reported it
@@ -71,17 +69,13 @@ async def abandon_active_session(
 
     rid = active.get("id")
     if not rid:
-        logger.warning(
-            "Active session for chat_id={} has no id field: {}", chat_id, active
-        )
+        logger.warning("Active session for chat_id={} has no id field: {}", chat_id, active)
         return None
 
     try:
         await backend.abandon_request(str(rid))
     except Exception as exc:
-        logger.warning(
-            "abandon_request failed for chat_id={} rid={}: {}", chat_id, rid, exc
-        )
+        logger.warning("abandon_request failed for chat_id={} rid={}: {}", chat_id, rid, exc)
         # Even if abandon failed, we still report the intent so the
         # caller UX matches what the user expects ("I pressed Начать,
         # my old thing should be gone"). The watchdog will converge

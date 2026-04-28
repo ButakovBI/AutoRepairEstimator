@@ -34,7 +34,7 @@ def inference_result_keyboard(request_id: str) -> str:
 #   * last page:     up to 8 group buttons + two trailing action buttons
 #                    ("Добавить повреждение" and "Готово").
 _GROUPS_PER_LAST_PAGE = VK_INLINE_MAX_BUTTONS - 2  # 8
-_GROUPS_PER_INNER_PAGE = VK_INLINE_MAX_BUTTONS     # 10
+_GROUPS_PER_INNER_PAGE = VK_INLINE_MAX_BUTTONS  # 10
 
 
 def _group_button_label(group: DamageGroup) -> str:
@@ -106,9 +106,7 @@ def _paginate_groups(groups: list[DamageGroup]) -> list[list[DamageGroup]]:
     return pages
 
 
-def damage_edit_keyboards_list(
-    request_id: str, damages: list[dict[str, Any]]
-) -> list[str]:
+def damage_edit_keyboards_list(request_id: str, damages: list[dict[str, Any]]) -> list[str]:
     """Return one JSON keyboard per VK message for the edit flow.
 
     Replaces the old ``damage_edit_keyboard`` (single keyboard with a
@@ -184,9 +182,7 @@ def edit_damage_type_keyboard(request_id: str, damage_id: str, part_type: str = 
     return kb.get_json()
 
 
-def group_submenu_keyboard(
-    request_id: str, part_type: str, damage_type: str, count: int
-) -> str:
+def group_submenu_keyboard(request_id: str, part_type: str, damage_type: str, count: int) -> str:
     """Sub-menu shown after tapping a grouped damage (N≥2) in the edit list.
 
     Offers bulk retype / bulk delete / single delete, plus a back button.
@@ -234,9 +230,7 @@ def group_retype_keyboard(request_id: str, part_type: str, damage_type_old: str)
     """
 
     kb = Keyboard(inline=True)
-    allowed_values = [
-        v for v in _allowed_damage_values_for(part_type) if v != damage_type_old
-    ]
+    allowed_values = [v for v in _allowed_damage_values_for(part_type) if v != damage_type_old]
     # Defensive fallback: if the filter produced an empty list (e.g. the
     # part has only one compatible damage type and that's the current one)
     # keep the old value in so the user at least has a visible escape

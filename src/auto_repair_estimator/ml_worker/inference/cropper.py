@@ -115,22 +115,14 @@ def crop_parts(
             )
         )
 
-    accepted_summary = " ".join(
-        f"crop={idx}:{c.part_type}@{c.confidence:.2f}" for idx, c in enumerate(crops)
-    ) or "<none>"
+    accepted_summary = (
+        " ".join(f"crop={idx}:{c.part_type}@{c.confidence:.2f}" for idx, c in enumerate(crops)) or "<none>"
+    )
     extras: list[str] = []
     if excluded_by_config:
-        extras.append(
-            "excluded_by_config=["
-            + ", ".join(f"{pt}@{conf:.2f}" for pt, conf in excluded_by_config)
-            + "]"
-        )
+        extras.append("excluded_by_config=[" + ", ".join(f"{pt}@{conf:.2f}" for pt, conf in excluded_by_config) + "]")
     if degenerate:
-        extras.append(
-            "degenerate=["
-            + ", ".join(f"{pt}@{conf:.2f}:{reason}" for pt, conf, reason in degenerate)
-            + "]"
-        )
+        extras.append("degenerate=[" + ", ".join(f"{pt}@{conf:.2f}:{reason}" for pt, conf, reason in degenerate) + "]")
     extras_str = (" " + " ".join(extras)) if extras else ""
 
     logger.info(

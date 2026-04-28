@@ -250,9 +250,7 @@ async def main() -> None:
     # in one place that's easy to audit and edit.
     damage_thresholds: dict[str, float] | None
     if config.damages_confidence_threshold is not None:
-        damage_thresholds = {
-            dt.value: config.damages_confidence_threshold for dt in DamageType
-        }
+        damage_thresholds = {dt.value: config.damages_confidence_threshold for dt in DamageType}
         logger.warning(
             "DAMAGES_CONFIDENCE_THRESHOLD env override active: applying uniform "
             "cutoff {:.2f} to all damage classes (per-class SSOT bypassed)",

@@ -108,9 +108,7 @@ def aggregate_damages_for_pricing(
     replacement_drops = 0
 
     for bucket in per_part.values():
-        replacement_reps = [
-            d for d in bucket.values() if causes_replacement(d.damage_type)
-        ]
+        replacement_reps = [d for d in bucket.values() if causes_replacement(d.damage_type)]
         if replacement_reps:
             # Collapse all replacement reps into one — they all price
             # identically for any given part in the rate card (see

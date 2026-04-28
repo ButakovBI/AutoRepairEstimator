@@ -81,8 +81,7 @@ class PricingService:
         aggregation = aggregate_damages_for_pricing(priceable_input)
         if aggregation.dropped_duplicates or aggregation.dropped_by_replacement_supersession:
             logger.info(
-                "Pricing aggregation for request={}: duplicates_dropped={} "
-                "replacement_superseded={}",
+                "Pricing aggregation for request={}: duplicates_dropped={} replacement_superseded={}",
                 request_id,
                 aggregation.dropped_duplicates,
                 aggregation.dropped_by_replacement_supersession,
@@ -135,9 +134,7 @@ class PricingService:
                     # here so a new replacement-class damage type gets
                     # the label for free via ``damage_severity.py``.
                     "treatment": (
-                        TREATMENT_REPLACEMENT
-                        if causes_replacement(damage.damage_type)
-                        else TREATMENT_DEFAULT
+                        TREATMENT_REPLACEMENT if causes_replacement(damage.damage_type) else TREATMENT_DEFAULT
                     ),
                 }
             )
@@ -164,8 +161,7 @@ class PricingService:
             )
 
         logger.info(
-            "Pricing result for request={}: cost=[{}..{}] hours=[{}..{}] notes={} "
-            "priced_rows={}",
+            "Pricing result for request={}: cost=[{}..{}] hours=[{}..{}] notes={} priced_rows={}",
             request_id,
             total_cost_min,
             total_cost_max,
