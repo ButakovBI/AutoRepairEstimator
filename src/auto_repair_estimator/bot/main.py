@@ -1,4 +1,5 @@
 from __future__ import annotations
+# mypy: disable-error-code=untyped-decorator
 
 import asyncio
 from typing import Any, cast
@@ -166,15 +167,15 @@ async def validate_active_rid_for_callback(
 
 
 def _register_handlers(bot: Bot, backend: BackendClient) -> None:
-    @bot.on.message(text=["/start", "Начать", "начать"])  # type: ignore[untyped-decorator]
+    @bot.on.message(text=["/start", "Начать", "начать"])
     async def on_start(message: Message) -> None:
         await handle_start(message, backend)
 
-    @bot.on.message()  # type: ignore[untyped-decorator]
+    @bot.on.message()
     async def on_message(message: Message) -> None:
         await handle_incoming_message(backend, bot.api, message)
 
-    @bot.on.raw_event(GroupEventType.MESSAGE_EVENT, dataclass=MessageEvent)  # type: ignore[untyped-decorator]
+    @bot.on.raw_event(GroupEventType.MESSAGE_EVENT, dataclass=MessageEvent)
     async def on_callback(event: MessageEvent) -> None:
         payload: dict[str, Any] = event.get_payload_json() or {}
         cmd = cast(str, payload.get("cmd"))
