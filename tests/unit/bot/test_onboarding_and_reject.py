@@ -59,7 +59,10 @@ class TestHandleStartCallback:
         event.peer_id = 123
         api = AsyncMock()
         api.messages.send = AsyncMock()
+        # No prior active — plain welcome with no notice prefix.
         backend = AsyncMock(spec=BackendClient)
+        backend.get_active_request = AsyncMock(return_value=None)
+        backend.abandon_request = AsyncMock()
 
         await handle_start_callback(event, {"cmd": "start"}, backend, api)
 

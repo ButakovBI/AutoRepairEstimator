@@ -12,8 +12,10 @@ import json
 
 from auto_repair_estimator.bot.keyboards.damage_edit import (
     add_more_or_confirm_keyboard,
-    damage_edit_keyboard,
+    damage_edit_keyboards_list,
     edit_damage_type_keyboard,
+    group_retype_keyboard,
+    group_submenu_keyboard,
     inference_result_keyboard,
 )
 from auto_repair_estimator.bot.keyboards.damage_type_selection import damage_type_selection_keyboard
@@ -183,28 +185,155 @@ class TestInferenceResultKeyboard:
         assert _payload(confirm_btn)["rid"] == "req-1"
 
 
-class TestDamageEditKeyboard:
-    def test_shows_one_manage_button_per_damage(self):
-        # Each damage emits a single collapsed "manage" button (cmd=edit, a=edit_type);
-        # the per-damage Delete button was moved to the sub-keyboard so the main
-        # keyboard can fit up to 8 damages within VK's 10-button cap.
+def _all_buttons_across_keyboards(keyboards: list[str]) -> list[dict]:
+    out: list[dict] = []
+    for kb_json in keyboards:
+        kb = _parse_keyboard(kb_json)
+        out.extend(btn for row in kb["buttons"] for btn in row)
+    return out
+
+
+class TestDamageEditKeyboardsList:
+    def test_single_damage_emits_legacy_edit_type_button(self):
+        # N=1 must stay on the legacy per-damage edit path so the user
+        # keeps the unchanged "edit / delete / back" sub-menu experience.
+        damages = [{"id": "d1", "part_type": "hood", "damage_type": "scratch"}]
+        kbs = damage_edit_keyboards_list("req-1", damages)
+        assert len(kbs) == 1
+        buttons = _all_buttons_across_keyboards(kbs)
+        edit_btns = [b for b in buttons if _payload(b).get("a") == "edit_type"]
+        assert len(edit_btns) == 1
+        assert _payload(edit_btns[0])["did"] == "d1"
+
+    def test_grouping_collapses_duplicate_part_damage_pairs(self):
+        # The reported bug: 17 scratches on a door collapsed to ONE
+        # button with "×17" suffix — otherwise the VK 10-button cap was
+        # silently eating damages past position #8.
+        damages = [
+            {"id": f"d{i}", "part_type": "door", "damage_type": "scratch"}
+            for i in range(17)
+        ]
+        kbs = damage_edit_keyboards_list("req-1", damages)
+        buttons = _all_buttons_across_keyboards(kbs)
+        group_btns = [b for b in buttons if _payload(b).get("cmd") == "grp"]
+        assert len(group_btns) == 1, "17 identical damages must collapse to one group"
+        label = group_btns[0]["action"]["label"]
+        assert "×17" in label
+        assert "Дверь" in label
+        assert "Царапина" in label
+
+    def test_group_button_payload_targets_grp_open(self):
         damages = [
             {"id": "d1", "part_type": "hood", "damage_type": "scratch"},
-            {"id": "d2", "part_type": "trunk", "damage_type": "dent"},
+            {"id": "d2", "part_type": "hood", "damage_type": "scratch"},
         ]
-        kb = _parse_keyboard(damage_edit_keyboard("req-1", damages))
-        all_buttons = [btn for row in kb["buttons"] for btn in row]
-        edit_btns = [b for b in all_buttons if _payload(b).get("a") == "edit_type"]
-        delete_btns = [b for b in all_buttons if _payload(b).get("a") == "delete"]
-        assert len(edit_btns) == 2
-        assert delete_btns == []
+        kbs = damage_edit_keyboards_list("req-1", damages)
+        group_btns = [
+            b for b in _all_buttons_across_keyboards(kbs) if _payload(b).get("cmd") == "grp"
+        ]
+        assert len(group_btns) == 1
+        payload = _payload(group_btns[0])
+        assert payload == {
+            "cmd": "grp",
+            "a": "open",
+            "rid": "req-1",
+            "pt": "hood",
+            "dt": "scratch",
+        }
 
-    def test_includes_add_more_and_confirm_buttons(self):
-        kb = _parse_keyboard(damage_edit_keyboard("req-1", []))
-        all_buttons = [btn for row in kb["buttons"] for btn in row]
-        cmds = {_payload(b)["cmd"] for b in all_buttons}
-        assert "addmore" in cmds
-        assert "confirm" in cmds
+    def test_empty_damages_still_shows_add_and_confirm(self):
+        # Edge case: editing an empty basket — the screen must still
+        # render the action buttons so the user has a clear exit.
+        kbs = damage_edit_keyboards_list("req-1", [])
+        assert len(kbs) == 1
+        buttons = _all_buttons_across_keyboards(kbs)
+        cmds = {_payload(b)["cmd"] for b in buttons}
+        assert cmds == {"addmore", "confirm"}
+
+    def test_every_page_respects_vk_inline_limits(self):
+        # 25 distinct groups — worst-case spread we can build from the
+        # domain (12 parts × all their compatible damages). Each page
+        # must stay within VK's 10-button cap and 6-row cap.
+        from auto_repair_estimator.bot.vk_limits import (
+            VK_INLINE_MAX_BUTTONS,
+            VK_INLINE_MAX_ROWS,
+        )
+
+        damages = [
+            {"id": f"d{i}", "part_type": "door", "damage_type": f"fake_{i}"}
+            for i in range(25)
+        ]
+        kbs = damage_edit_keyboards_list("req-1", damages)
+        # Every damage is distinct → must produce ≥ 3 pages (25 / 8 LAST=3 or 2+1 overflow).
+        assert len(kbs) >= 3
+        for kb_json in kbs:
+            kb = _parse_keyboard(kb_json)
+            rows = kb["buttons"]
+            assert len(rows) <= VK_INLINE_MAX_ROWS
+            btns = [b for row in rows for b in row]
+            assert len(btns) <= VK_INLINE_MAX_BUTTONS
+
+    def test_only_last_page_carries_addmore_and_confirm(self):
+        damages = [
+            {"id": f"d{i}", "part_type": "door", "damage_type": f"fake_{i}"}
+            for i in range(25)
+        ]
+        kbs = damage_edit_keyboards_list("req-1", damages)
+        for kb_json in kbs[:-1]:
+            buttons = _all_buttons_across_keyboards([kb_json])
+            cmds = {_payload(b)["cmd"] for b in buttons}
+            assert "addmore" not in cmds
+            assert "confirm" not in cmds
+        # Last page carries both.
+        last_cmds = {
+            _payload(b)["cmd"] for b in _all_buttons_across_keyboards([kbs[-1]])
+        }
+        assert "addmore" in last_cmds
+        assert "confirm" in last_cmds
+
+
+class TestGroupSubmenuKeyboard:
+    def test_has_three_action_buttons_plus_back(self):
+        kb = _parse_keyboard(group_submenu_keyboard("req-1", "door", "scratch", 5))
+        buttons = [b for row in kb["buttons"] for b in row]
+        actions = {_payload(b).get("a") for b in buttons}
+        assert {"retype", "del_all", "del_one"} <= actions
+        cmds = {_payload(b)["cmd"] for b in buttons}
+        assert "back_edit" in cmds
+
+    def test_labels_include_group_count_so_user_sees_blast_radius(self):
+        kb = _parse_keyboard(group_submenu_keyboard("req-1", "door", "scratch", 7))
+        labels = [b["action"]["label"] for row in kb["buttons"] for b in row]
+        # "×7" must appear on the destructive buttons — without it the
+        # user cannot tell they're about to nuke seven items, not one.
+        assert any("×7" in lbl for lbl in labels)
+
+
+class TestGroupRetypeKeyboard:
+    def test_filters_by_part_and_hides_current_type(self):
+        # Door is a body panel: compatible with scratch/dent/paint_chip/rust/crack.
+        # The old type ``scratch`` must be filtered out so the user cannot
+        # apply a no-op retype (which would waste a VK button slot).
+        kb = _parse_keyboard(group_retype_keyboard("req-1", "door", "scratch"))
+        buttons = [b for row in kb["buttons"] for b in row]
+        retype_btns = [b for b in buttons if _payload(b).get("a") == "apply_retype"]
+        dt_old_values = {_payload(b)["dt"] for b in retype_btns}
+        assert dt_old_values == {"scratch"}, "dt carries the OLD type for resolution"
+        nd_values = {_payload(b)["nd"] for b in retype_btns}
+        assert "scratch" not in nd_values
+        assert nd_values == {"dent", "paint_chip", "rust", "crack"}
+
+    def test_retype_button_payload_shape(self):
+        kb = _parse_keyboard(group_retype_keyboard("req-1", "hood", "dent"))
+        btn = [
+            b for row in kb["buttons"] for b in row if _payload(b).get("a") == "apply_retype"
+        ][0]
+        payload = _payload(btn)
+        assert payload["cmd"] == "grp"
+        assert payload["rid"] == "req-1"
+        assert payload["pt"] == "hood"
+        assert payload["dt"] == "dent"  # OLD
+        assert "nd" in payload  # NEW
 
 
 class TestEditDamageTypeKeyboard:
@@ -248,21 +377,28 @@ class TestEditDamageTypeKeyboard:
 
 
 class TestDamageEditKeyboardPropagatesPartType:
-    def test_edit_type_callback_carries_part_type(self):
-        # The manage button must carry `pt` so the sub-handler can render
-        # the part-specific edit keyboard without a backend round-trip.
+    def test_single_damage_edit_callback_carries_part_type(self):
+        # The N=1 path uses the legacy edit_type cmd and must carry `pt`
+        # so the sub-handler can render the part-filtered edit keyboard
+        # without a backend round-trip.
         damages = [{"id": "d1", "part_type": "wheel", "damage_type": "flat_tire"}]
-        kb = _parse_keyboard(damage_edit_keyboard("req-1", damages))
-        all_buttons = [btn for row in kb["buttons"] for btn in row]
-        manage_btns = [b for b in all_buttons if _payload(b).get("a") == "edit_type"]
+        kbs = damage_edit_keyboards_list("req-1", damages)
+        buttons = _all_buttons_across_keyboards(kbs)
+        manage_btns = [b for b in buttons if _payload(b).get("a") == "edit_type"]
         assert len(manage_btns) == 1
         assert _payload(manage_btns[0])["pt"] == "wheel"
 
 
 class TestAddMoreOrConfirmKeyboard:
-    def test_has_two_buttons_addmore_and_confirm(self):
+    def test_has_three_buttons_addmore_edit_and_confirm(self):
+        # "Подправить" is the manual-flow entry into the shared edit
+        # screen — without it, manual-mode users cannot revise their
+        # additions before confirming (they had to reset the session).
         kb = _parse_keyboard(add_more_or_confirm_keyboard("req-1"))
         all_buttons = [btn for row in kb["buttons"] for btn in row]
-        assert len(all_buttons) == 2
         cmds = {_payload(b)["cmd"] for b in all_buttons}
-        assert cmds == {"addmore", "confirm"}
+        assert "addmore" in cmds
+        assert "confirm" in cmds
+        edit_btns = [b for b in all_buttons if _payload(b).get("cmd") == "edit"]
+        assert len(edit_btns) == 1
+        assert _payload(edit_btns[0])["a"] == "start_edit"

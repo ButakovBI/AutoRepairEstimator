@@ -430,6 +430,43 @@ async def test_done_request_is_not_updated_on_late_inference_result() -> None:
 
 
 @pytest.mark.anyio
+async def test_failed_request_ignores_late_inference_result() -> None:
+    """User abandoned (FAILED) + late success from the ml_worker.
+
+    The user pressed «Начать» or sent a replacement photo, which moved
+    the request to FAILED (``ml_error_code="user_abandoned"``). Moments
+    later the ml_worker finishes its in-flight inference for the
+    abandoned request and publishes an ``inference_results`` message.
+    Accepting it would re-open a terminal row, enqueue a stale
+    ``inference_complete`` notification to the bot, and generally break
+    the "abandonment is final" contract.
+    """
+
+    req_repo = _FakeRequestRepo()
+    outbox_repo = _FakeOutboxRepo()
+    req_id = str(uuid4())
+    await req_repo.add(_make_request(req_id, RequestStatus.FAILED))
+    use_case = _make_use_case(req_repo, _FakePartRepo(), _FakeDamageRepo(), outbox_repo)
+
+    await use_case.execute(
+        ProcessInferenceResultInput(
+            request_id=req_id,
+            status="success",
+            parts=[],
+            damages=[],
+            composited_image_key="composites/x.jpg",
+            error_message=None,
+        )
+    )
+
+    # FAILED is terminal — no state mutation, no outbox event.
+    updated = await req_repo.get(req_id)
+    assert updated is not None
+    assert updated.status is RequestStatus.FAILED
+    assert await outbox_repo.get_unpublished(10) == []
+
+
+@pytest.mark.anyio
 async def test_processing_result_for_unknown_request_produces_no_side_effects() -> None:
     # Arrange
     req_repo = _FakeRequestRepo()

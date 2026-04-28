@@ -2,16 +2,17 @@
 
 ``handle_incoming_message`` and ``validate_active_rid_for_callback`` are
 the two decision points that used to live as closures inside
-``_register_handlers``. They encode every bug-fix from the latest UX
-round (bugs #2/#3/#4) so we assert each branch with explicit fakes:
+``_register_handlers``. Behaviour under test:
 
-* photo + active MANUAL → photo-gating nudge, no ML request
-* photo + active ML / no active → delegates to ``handle_photo``
-* text + active → ``active_session_nudge`` is delivered (never the
-  generic "use the buttons" copy when the last message had none)
-* callback validation: missing rid, missing active, rid mismatch,
-  manual-flow cmd outside PRICING — each path ends in a single rejection
-  nudge, never in a backend mutation.
+* **Photo branch**: always delegates to ``handle_photo`` (the dispatcher
+  no longer gates photos on the active-session mode — that decision now
+  lives entirely inside ``handle_photo``, which enforces the single-
+  active-session invariant with a user-visible notice).
+* **Text branch**: active-session lookup + ``active_session_nudge``
+  delivers the (mode, status)-aware hint; no active → "press Начать".
+* **Callback validation**: missing rid, missing active, rid mismatch,
+  manual-flow cmd outside PRICING — each path ends in a single
+  rejection nudge, never in a backend mutation.
 """
 
 from __future__ import annotations
@@ -19,10 +20,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from auto_repair_estimator.bot.handlers.start import (
-    NO_ACTIVE_SESSION_TEXT,
-    PHOTO_DURING_MANUAL_NUDGE,
-)
+from auto_repair_estimator.bot.handlers.start import NO_ACTIVE_SESSION_TEXT
 from auto_repair_estimator.bot.main import (
     CALLBACK_HANDLERS,
     CMDS_REQUIRING_ACTIVE_RID,
@@ -62,59 +60,40 @@ def _sent_texts(api: MagicMock) -> list[str]:
 
 
 class TestHandleIncomingMessagePhotoPath:
-    """Photo-branch invariants from bug #4 and the broader photo pipeline."""
+    """Photo-branch invariants enforced by the top-level dispatcher.
 
-    async def test_photo_during_manual_is_gated(self):
-        # Active MANUAL session + photo arrives → we must nudge the user
-        # to switch modes instead of silently creating a parallel ML
-        # request (which would leave two non-terminal rows per chat).
-        backend = _fake_backend(active={"id": "r-1", "mode": "manual", "status": "pricing"})
-        api = _fake_api()
-        msg = _fake_message(photos=[MagicMock()])
+    After the single-active-session refactor the dispatcher is no longer
+    responsible for the abandon/notice decision — it unconditionally
+    hands photos off to ``handle_photo``. These tests pin that contract
+    so no future change reintroduces the manual-mode rejection path.
+    """
 
-        with patch("auto_repair_estimator.bot.main.handle_photo", new=AsyncMock()) as fake_photo:
-            await handle_incoming_message(backend, api, msg)
-            fake_photo.assert_not_awaited()
+    async def test_photo_always_goes_to_handle_photo_regardless_of_mode(self):
+        # Every "chat state" that used to have a branch in the old
+        # dispatcher: no active, active ML (any status), active MANUAL.
+        # All three must now route identically through ``handle_photo``
+        # — the abandon-and-notify logic lives there, not here.
+        scenarios: list[dict[str, Any] | None] = [
+            None,
+            {"id": "r-1", "mode": "ml", "status": "created"},
+            {"id": "r-1", "mode": "ml", "status": "processing"},
+            {"id": "r-1", "mode": "manual", "status": "pricing"},
+        ]
+        for active in scenarios:
+            backend = _fake_backend(active=active)
+            api = _fake_api()
+            msg = _fake_message(photos=[MagicMock()])
 
-        msg.answer.assert_awaited_once()
-        assert msg.answer.await_args.args[0] == PHOTO_DURING_MANUAL_NUDGE
+            with patch(
+                "auto_repair_estimator.bot.main.handle_photo", new=AsyncMock()
+            ) as fake_photo:
+                await handle_incoming_message(backend, api, msg)
+                fake_photo.assert_awaited_once_with(msg, backend, api)
 
-    async def test_photo_with_no_active_session_goes_to_ml(self):
-        # No active → photo is the start of a brand-new ML request. The
-        # "no active session" reject must NOT fire on this path.
-        backend = _fake_backend(active=None)
-        api = _fake_api()
-        msg = _fake_message(photos=[MagicMock()])
-
-        with patch("auto_repair_estimator.bot.main.handle_photo", new=AsyncMock()) as fake_photo:
-            await handle_incoming_message(backend, api, msg)
-            fake_photo.assert_awaited_once_with(msg, backend, api)
-
-        msg.answer.assert_not_awaited()
-        api.messages.send.assert_not_awaited()
-
-    async def test_photo_with_active_ml_session_goes_to_ml(self):
-        # ML already active + another photo is a legitimate "retry with
-        # a clearer shot". handle_photo handles dedup/abandon logic.
-        backend = _fake_backend(active={"id": "r-1", "mode": "ml", "status": "processing"})
-        api = _fake_api()
-        msg = _fake_message(photos=[MagicMock()])
-
-        with patch("auto_repair_estimator.bot.main.handle_photo", new=AsyncMock()) as fake_photo:
-            await handle_incoming_message(backend, api, msg)
-            fake_photo.assert_awaited_once()
-
-    async def test_backend_probe_failure_does_not_block_photo(self):
-        # Probe raised → we degrade to "active unknown" and still take the
-        # non-manual branch so a transient backend hiccup never swallows
-        # the user's photo upload.
-        backend = _fake_backend(raises=RuntimeError("boom"))
-        api = _fake_api()
-        msg = _fake_message(photos=[MagicMock()])
-
-        with patch("auto_repair_estimator.bot.main.handle_photo", new=AsyncMock()) as fake_photo:
-            await handle_incoming_message(backend, api, msg)
-            fake_photo.assert_awaited_once()
+            # Dispatcher itself must stay silent — the user-visible
+            # notice comes from handle_photo's abandon branch.
+            msg.answer.assert_not_awaited()
+            api.messages.send.assert_not_awaited()
 
 
 class TestHandleIncomingMessageTextPath:

@@ -101,50 +101,47 @@ class TestHandlePhoto:
         assert "несколько" not in first_text.lower()
         assert "Загружаю" in first_text
 
-    async def test_multiple_photos_create_one_request_per_photo(self):
-        # Arrange — two photos in one VK message
+    async def test_multiple_photos_create_exactly_one_request(self):
+        # After the single-active-session refactor: N attachments in one
+        # VK message must collapse to ONE RepairRequest. The previous
+        # "one per photo" fan-out violated the invariant and is now
+        # explicitly forbidden. A dedicated notice is sent to the user —
+        # that copy is pinned in test_session_lifecycle.py.
         message = MagicMock()
         message.peer_id = 10
         message.from_id = 20
+        message.conversation_message_id = 1001
         message.get_photo_attachments = MagicMock(
             return_value=[
                 _make_photo_attachment("https://vk.test/first.jpg"),
                 _make_photo_attachment("https://vk.test/second.jpg"),
+                _make_photo_attachment("https://vk.test/third.jpg"),
             ]
         )
         message.answer = AsyncMock()
         backend = AsyncMock(spec=BackendClient)
-        # Valid presigned URLs on both — bare ``None`` would now correctly
-        # abort the upload (see handle_photo's defensive guard) and the
-        # batching contract we want to prove here would be obscured by
-        # the error path. We test the "no presigned URL" behaviour in its
-        # own dedicated test.
+        backend.get_active_request = AsyncMock(return_value=None)
+        backend.abandon_request = AsyncMock(return_value={"id": "x", "status": "failed"})
         backend.create_request = AsyncMock(
-            side_effect=[
-                {"id": "req-1", "presigned_put_url": "https://minio/put?a=1"},
-                {"id": "req-2", "presigned_put_url": "https://minio/put?a=2"},
-            ]
+            return_value={"id": "req-1", "presigned_put_url": "https://minio/put?a=1"}
         )
         backend.upload_photo = AsyncMock()
         api = MagicMock()
 
-        # Act
         with patch("auto_repair_estimator.bot.handlers.photo.httpx.AsyncClient", _FakeHttpxAsyncClient):
             await handle_photo(message, backend, api)
 
-        # Assert — one backend request per photo, each with its own upload
-        assert backend.create_request.await_count == 2
-        assert backend.upload_photo.await_count == 2
-        first_upload = backend.upload_photo.await_args_list[0].kwargs
-        second_upload = backend.upload_photo.await_args_list[1].kwargs
-        assert first_upload["request_id"] == "req-1"
-        assert second_upload["request_id"] == "req-2"
-        assert first_upload["image_key"] == "raw-images/req-1.jpg"
-        assert second_upload["image_key"] == "raw-images/req-2.jpg"
+        assert backend.create_request.await_count == 1
+        assert backend.upload_photo.await_count == 1
+        upload = backend.upload_photo.await_args.kwargs
+        assert upload["request_id"] == "req-1"
+        assert upload["image_key"] == "raw-images/req-1.jpg"
 
-        # Intro mentions batch handling
+        # The user is told explicitly that only one photo will be used —
+        # otherwise they might assume the other photos are also being
+        # processed in the background.
         intro = message.answer.await_args_list[0].args[0]
-        assert "2" in intro
+        assert "одну фотографию" in intro
 
     async def test_photo_upload_uses_presigned_url_when_provided(self):
         # Arrange
@@ -213,9 +210,14 @@ class TestHandlePhoto:
 class TestHandleStart:
     async def test_sends_welcome_message_with_mode_keyboard(self):
         message = MagicMock()
+        message.peer_id = 100
         message.answer = AsyncMock()
+        # No prior active session → plain welcome path (no notice prefix).
+        backend = AsyncMock(spec=BackendClient)
+        backend.get_active_request = AsyncMock(return_value=None)
+        backend.abandon_request = AsyncMock()
 
-        await handle_start(message)
+        await handle_start(message, backend)
 
         message.answer.assert_called_once()
         call_kwargs = message.answer.call_args
@@ -343,6 +345,26 @@ class TestHandleDamageTypeSelection:
 
         call_kwargs = api.messages.send.call_args.kwargs
         assert "ошибка" in call_kwargs["message"].lower()
+
+    async def test_already_existed_switches_heading_from_added_to_already_in_list(self):
+        """When the backend signals ``already_existed=True`` the bot must
+        tell the user the click was recognised but didn't grow the list —
+        otherwise a duplicate tap would look like it quietly failed, or
+        (worse) look like it added a second copy while the list below
+        shows only one."""
+        event = _make_event()
+        api = _make_api()
+        # Idempotent no-op response from the backend's AddDamageUseCase.
+        backend = _make_backend(add_damage={"id": "d1", "already_existed": True})
+
+        await handle_damage_type_selection(
+            event, {"rid": "req-1", "pt": "door", "dt": "scratch"}, backend, api
+        )
+
+        message = api.messages.send.call_args.kwargs["message"]
+        # New heading mentions the duplicate signal, NOT the "Добавлено" wording.
+        assert "уже есть" in message.lower()
+        assert "Добавлено" not in message
 
 
 class TestHandleAddMore:
@@ -510,6 +532,73 @@ class TestHandleConfirm:
         # "кузовной ремонт не требуется" copy when breakdown is empty.
         assert "Стоимость ремонта" not in message
         assert "кузовной ремонт" in message.lower()
+
+    async def test_replacement_treatment_appends_zamena_suffix(self):
+        """For replacement-class damages backend ships ``treatment='replacement'``
+        in each breakdown row; the bot appends "— замена" right after the
+        damage label so the user can instantly tell a priced row is for a
+        full-part replacement rather than body-work."""
+        event = _make_event()
+        api = _make_api()
+        backend = _make_backend(
+            confirm_pricing={
+                "total_cost_min": 18_000.0,
+                "total_cost_max": 18_000.0,
+                "total_hours_min": 12.0,
+                "total_hours_max": 12.0,
+                "breakdown": [
+                    {
+                        "part_type": "bumper",
+                        "damage_type": "crack",
+                        "cost_min": 18_000.0,
+                        "cost_max": 18_000.0,
+                        "hours_min": 12.0,
+                        "hours_max": 12.0,
+                        "treatment": "replacement",
+                    },
+                ],
+                "notes": [],
+            }
+        )
+
+        await handle_confirm(event, {"rid": "req-1"}, backend, api)
+
+        message = api.messages.send.call_args.kwargs["message"]
+        # Damage label followed by the treatment marker, before the cost.
+        assert "Бампер — Трещина — замена" in message
+
+    async def test_default_treatment_renders_without_zamena_suffix(self):
+        """Non-replacement damages (scratch/dent/rust) must NOT carry the
+        "— замена" suffix: the cost range already tells the user it's
+        body-work, and a misleading suffix would suggest a teardown."""
+        event = _make_event()
+        api = _make_api()
+        backend = _make_backend(
+            confirm_pricing={
+                "total_cost_min": 10_000.0,
+                "total_cost_max": 18_000.0,
+                "total_hours_min": 8.0,
+                "total_hours_max": 8.0,
+                "breakdown": [
+                    {
+                        "part_type": "door",
+                        "damage_type": "scratch",
+                        "cost_min": 10_000.0,
+                        "cost_max": 18_000.0,
+                        "hours_min": 8.0,
+                        "hours_max": 8.0,
+                        "treatment": "default",
+                    },
+                ],
+                "notes": [],
+            }
+        )
+
+        await handle_confirm(event, {"rid": "req-1"}, backend, api)
+
+        message = api.messages.send.call_args.kwargs["message"]
+        # The scratch row must not have "— замена" anywhere in its line.
+        assert "замена" not in message.lower()
 
     async def test_range_and_polish_note_are_both_rendered_for_scratch(self):
         event = _make_event()

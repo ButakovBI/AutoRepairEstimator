@@ -147,6 +147,39 @@ async def test_breakdown_item_exposes_min_max_per_phase() -> None:
 
 
 @pytest.mark.anyio
+async def test_breakdown_marks_replacement_damages_with_treatment_replacement() -> None:
+    """Crack on bumper must carry ``treatment='replacement'`` — the bot uses
+    it to render "— замена" inline. Without this signal the user can't
+    tell replacement prices from regular body-work prices at a glance.
+    """
+    # Bumper × Crack: табличное "Замена детали" — 18 тыс. руб., 1.5 дня.
+    bumper_crack = _rule(PartType.BUMPER, DamageType.CRACK, 12, 12, 18_000, 18_000)
+    repo = InMemoryPricingRuleRepository([bumper_crack])
+    service = PricingService(_rule_repository=repo)
+    damages = [_damage(PartType.BUMPER, DamageType.CRACK)]
+
+    result = await service.calculate("req-1", damages)
+
+    assert len(result.breakdown) == 1
+    assert result.breakdown[0]["treatment"] == "replacement"
+
+
+@pytest.mark.anyio
+async def test_breakdown_marks_non_replacement_damages_with_default_treatment() -> None:
+    """Scratches/dents imply painting/dent work, not replacement — must not
+    be flagged as ``treatment='replacement'`` so the bot leaves off the
+    "— замена" suffix."""
+    repo = InMemoryPricingRuleRepository([_BUMPER_DENT_RULE])
+    service = PricingService(_rule_repository=repo)
+    damages = [_damage(PartType.BUMPER, DamageType.DENT)]
+
+    result = await service.calculate("req-1", damages)
+
+    assert len(result.breakdown) == 1
+    assert result.breakdown[0]["treatment"] != "replacement"
+
+
+@pytest.mark.anyio
 async def test_wheel_damage_emits_tyre_shop_note_and_no_price() -> None:
     """Wheel damage is explicitly out of the body shop's scope per §5 of the
     requirements: no price row, just a routing hint."""

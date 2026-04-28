@@ -192,6 +192,111 @@ async def test_concurrent_state_change_does_not_crash_the_loop() -> None:
     assert events[0].payload["request_id"] == processing.id
 
 
+@pytest.mark.anyio
+async def test_already_abandoned_request_is_skipped_not_renotified() -> None:
+    """Race: between the batch fetch and loop iteration, the user pressed
+    «Начать» / sent another photo and ``AbandonRequestUseCase`` moved
+    the row to ``FAILED`` with ``ml_error_code="user_abandoned"``.
+
+    Without the re-fetch guard the watchdog would:
+      1. transition the *stale* PROCESSING snapshot → FAILED, overwriting
+         ``ml_error_code="user_abandoned"`` with ``None``,
+      2. still emit a ``request_timeout`` event — so the user, who has
+         already seen «Предыдущая заявка закрыта», ALSO receives
+         «превышено время ожидания» for the same logical session.
+
+    With the guard both failure modes are prevented: we see the live
+    status is already terminal and skip the whole row.
+    """
+
+    checker, requests, outbox = await _build_checker()
+
+    expired = _make_request(
+        status=RequestStatus.PROCESSING,
+        timeout_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    await requests.add(expired)
+
+    # Simulate the abandon landing AFTER get_timed_out_requests has
+    # already put ``expired`` into the batch. We do it by subclassing
+    # the repo so the scan returns the stale snapshot but the live
+    # ``get`` reflects the post-abandon state.
+    class _AbandonRaceRepo(InMemoryRepairRequestRepository):
+        def __init__(self, stale_snapshot: RepairRequest) -> None:
+            super().__init__()
+            self._stale = stale_snapshot
+
+        async def get_timed_out_requests(self) -> list[RepairRequest]:
+            # What the watchdog saw BEFORE the abandon landed.
+            return [self._stale]
+
+    race_repo = _AbandonRaceRepo(expired)
+    # Seed the "live" row in the post-abandon state.
+    abandoned_live = RepairRequest(
+        id=expired.id,
+        chat_id=expired.chat_id,
+        user_id=expired.user_id,
+        mode=expired.mode,
+        status=RequestStatus.FAILED,
+        created_at=expired.created_at,
+        updated_at=datetime.now(UTC),
+        timeout_at=expired.timeout_at,
+        ml_error_code="user_abandoned",
+    )
+    await race_repo.add(abandoned_live)
+
+    race_checker = HeartbeatChecker(
+        request_repository=race_repo,
+        outbox_repository=outbox,
+        state_machine=RequestStateMachine(),
+        notifications_topic="notifications",
+    )
+
+    await race_checker._check_timeouts()
+
+    # The abandon reason must be preserved — no stale overwrite.
+    live = await race_repo.get(expired.id)
+    assert live is not None
+    assert live.status is RequestStatus.FAILED
+    assert live.ml_error_code == "user_abandoned"
+
+    # And crucially: NO timeout notification was emitted on top of the
+    # abandon the user already got feedback for.
+    assert await outbox.get_unpublished(limit=10) == []
+
+
+@pytest.mark.anyio
+async def test_vanished_request_is_skipped_without_crashing() -> None:
+    # Defensive: the live ``get`` returns None (e.g. row was purged by
+    # an operator between scan and iteration). The loop must not crash
+    # and must not emit a notification for a row that no longer exists.
+    checker, requests, outbox = await _build_checker()
+
+    expired = _make_request(
+        status=RequestStatus.PROCESSING,
+        timeout_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+
+    class _VanishingRepo(InMemoryRepairRequestRepository):
+        async def get_timed_out_requests(self) -> list[RepairRequest]:
+            return [expired]
+
+        async def get(self, request_id: str) -> RepairRequest | None:
+            return None
+
+    vanish_repo = _VanishingRepo()
+    vanish_checker = HeartbeatChecker(
+        request_repository=vanish_repo,
+        outbox_repository=outbox,
+        state_machine=RequestStateMachine(),
+        notifications_topic="notifications",
+    )
+
+    await vanish_checker._check_timeouts()
+
+    assert await outbox.get_unpublished(limit=10) == []
+
+
 # Silence asyncio warnings because these tests are event-loop based. AnyIO
 # wires the loop automatically via ``pytest.mark.anyio``.
 def _touch_unused_symbols() -> None:  # pragma: no cover - import-time guard only

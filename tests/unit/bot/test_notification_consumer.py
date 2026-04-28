@@ -140,6 +140,74 @@ class TestNotificationConsumerHandle:
 
         assert re.search(r"\d{2}:\d{2}", msg), f"Expected HH:MM in: {msg!r}"
 
+    async def test_request_timeout_message_uses_timeout_wording_not_error(self):
+        """The copy must frame the failure as a timeout closing the
+        session, not as "finished with an error" — the user did nothing
+        wrong and phrasing it as their error shifts blame."""
+
+        consumer, api, _ = _make_consumer()
+
+        await consumer._handle(
+            {
+                "chat_id": 789,
+                "request_id": "req-3",
+                "type": "request_timeout",
+                "request_created_at": "2026-04-19T11:00:00+00:00",
+            }
+        )
+
+        msg = api.messages.send.call_args.kwargs["message"]
+        assert "истекло" in msg.lower() or "закрыта" in msg.lower()
+        # Previous wording is explicitly out — regression fence.
+        assert "завершилась с ошибкой" not in msg.lower()
+
+    async def test_request_timeout_message_renders_time_in_moscow_tz(self):
+        """The bot must render wall-clock times in GMT+3 Moscow time, not
+        UTC or the container's local clock. The reporter complaint was
+        14:00 MSK showing up as 11:00 because the notification consumer
+        was calling ``datetime.astimezone()`` with no argument (which
+        defaults to the host tz, which is UTC inside the container)."""
+
+        consumer, api, _ = _make_consumer()
+
+        # 11:00 UTC == 14:00 MSK (UTC+3). We pin a UTC moment and assert
+        # the MSK wall-clock string appears verbatim in the message.
+        await consumer._handle(
+            {
+                "chat_id": 789,
+                "request_id": "req-3",
+                "type": "request_timeout",
+                "request_created_at": "2026-04-19T11:00:00+00:00",
+            }
+        )
+
+        msg = api.messages.send.call_args.kwargs["message"]
+        assert "19.04 14:00" in msg, f"expected MSK wall-clock '14:00' in: {msg!r}"
+        # And that the conversion is explicitly communicated so users
+        # understand which timezone they are reading.
+        assert "МСК" in msg
+
+    async def test_request_timeout_message_with_naive_timestamp_is_assumed_utc(self):
+        """A timestamp without explicit tzinfo (edge case from a legacy
+        producer) must still render in MSK, treating the naive value as
+        UTC. The alternative — treating it as host-local — would flip
+        between 11 and 14 depending on whose laptop ran the bot."""
+
+        consumer, api, _ = _make_consumer()
+
+        await consumer._handle(
+            {
+                "chat_id": 789,
+                "request_id": "req-3",
+                "type": "request_timeout",
+                # Naive timestamp — no trailing offset.
+                "request_created_at": "2026-04-19T11:00:00",
+            }
+        )
+
+        msg = api.messages.send.call_args.kwargs["message"]
+        assert "19.04 14:00" in msg
+
     async def test_request_timeout_falls_back_cleanly_on_malformed_created_at(self):
         """A broken ``request_created_at`` must not swallow the whole
         notification — the user still needs the "your request failed"

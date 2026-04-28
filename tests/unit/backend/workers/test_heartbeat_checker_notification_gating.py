@@ -174,6 +174,66 @@ async def test_ml_timeout_emits_notification_when_no_other_active_request() -> N
 
 
 @pytest.mark.anyio
+async def test_ml_timeout_in_pricing_status_does_not_notify_user() -> None:
+    """PRICING = inference succeeded, the user is editing the damage list.
+
+    A watchdog timeout in this state still needs to be hygienically
+    swept into FAILED server-side (otherwise the row would sit
+    non-terminal forever), but the user has no model-related action to
+    retry here — shouting "timed out, try again" on top of their edit
+    session would just confuse them. This is the gate that keeps the
+    timeout copy from appearing mid-edit.
+    """
+
+    checker, requests, outbox = await _run_checker()
+    expired_pricing = _make_request(
+        req_id="ml-pricing-expired",
+        chat_id=4004,
+        mode=RequestMode.ML,
+        status=RequestStatus.PRICING,
+        timeout_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    await requests.add(expired_pricing)
+
+    await checker._check_timeouts()
+
+    # Row is still cleaned up server-side...
+    stored = await requests.get(expired_pricing.id)
+    assert stored is not None
+    assert stored.status is RequestStatus.FAILED
+    # ...but the user stays silent — no "timeout" pop-up mid-edit.
+    assert await outbox.get_unpublished(limit=10) == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "processing_status",
+    [RequestStatus.CREATED, RequestStatus.QUEUED, RequestStatus.PROCESSING],
+)
+async def test_ml_timeout_in_pre_pricing_statuses_does_notify(processing_status: RequestStatus) -> None:
+    """Every status where the user is *waiting on the model* must emit
+    the timeout notification so the user knows their ML session died
+    and can restart. PRICING is the only excluded state — verified
+    separately."""
+
+    checker, requests, outbox = await _run_checker()
+    expired = _make_request(
+        req_id=f"ml-expired-{processing_status.value}",
+        chat_id=5050,
+        mode=RequestMode.ML,
+        status=processing_status,
+        timeout_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    await requests.add(expired)
+
+    await checker._check_timeouts()
+
+    events = await outbox.get_unpublished(limit=10)
+    assert len(events) == 1
+    assert events[0].payload["type"] == "request_timeout"
+
+
+@pytest.mark.anyio
 async def test_other_chat_active_session_does_not_suppress_notification() -> None:
     """The active-sibling rule is scoped per-chat. An unrelated user's
     live session must not silence a legitimate ML timeout for a

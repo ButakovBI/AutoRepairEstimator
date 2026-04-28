@@ -71,13 +71,18 @@ class _FakeResult:
 
 
 class _FakeYOLO:
-    """Drop-in for ``ultralytics.YOLO`` — only the fields touched by our code."""
+    """Drop-in for ``ultralytics.YOLO`` — only the fields touched by our code.
+
+    ``__call__`` accepts arbitrary kwargs (``verbose``, ``conf``, ...) so
+    the fixture stays compatible when the detector starts passing new
+    inference knobs to the underlying model.
+    """
 
     def __init__(self, names: dict[int, str], results: list[_FakeResult]) -> None:
         self.names = names
         self._results = results
 
-    def __call__(self, _image: Any, verbose: bool = False) -> list[_FakeResult]:  # noqa: ARG002
+    def __call__(self, _image: Any, **_kwargs: Any) -> list[_FakeResult]:
         return self._results
 
 
@@ -186,6 +191,123 @@ class TestDamageDetectorPredictFiltering:
 
         assert len(detections) == 1
         assert detections[0].mask_key is None
+
+
+class TestDamageDetectorPerClassThresholds:
+    """The detector must apply DIFFERENT cutoffs to different classes.
+
+    Uniform global thresholding silently rejected legitimate dents and
+    cracks (which the user complained were "missing") because they
+    score lower confidences than the well-represented scratch class.
+    These tests pin the per-class behaviour so a future regression
+    that flattens thresholds back to a single float is caught.
+    """
+
+    def test_low_threshold_class_passes_when_high_threshold_class_would_be_dropped(self) -> None:
+        # Two boxes at confidence 0.30: a DENT (cutoff 0.25 → accept)
+        # and a SCRATCH (cutoff 0.50 → reject). A legacy uniform
+        # threshold could only do one of these decisions, never both.
+        thresholds = {DamageType.DENT.value: 0.25, DamageType.SCRATCH.value: 0.50}
+        detector = DamageDetector(model_path="unused", thresholds=thresholds)
+        detector._model = _FakeYOLO(  # type: ignore[attr-defined]
+            names={0: DamageType.DENT.value, 1: DamageType.SCRATCH.value},
+            results=[
+                _FakeResult(
+                    boxes=[
+                        _FakeBox(conf=[0.30], cls=[0]),  # dent — passes 0.25 cutoff
+                        _FakeBox(conf=[0.30], cls=[1]),  # scratch — fails 0.50 cutoff
+                    ],
+                    names={0: DamageType.DENT.value, 1: DamageType.SCRATCH.value},
+                    masks=None,
+                )
+            ],
+        )
+
+        detections = detector.predict(
+            crop_bytes=_jpeg_bytes(),
+            part_type="door",
+            request_id="r",
+            crop_index=0,
+            bucket="b",
+        )
+
+        kinds = {d.damage_type for d in detections}
+        assert kinds == {DamageType.DENT.value}, (
+            "Per-class thresholds must keep the dent (above its 0.25 cutoff) "
+            "and drop the scratch (below its 0.50 cutoff)."
+        )
+
+    def test_unknown_class_uses_floor_then_enum_filter_drops_it(self) -> None:
+        # An unknown class lacks a per-class entry, so it gets the floor
+        # treatment: it survives the conf check at conf >= floor, then is
+        # filtered by the DamageType enum check. This guards against a
+        # subtle bug where an unknown class with very low conf could be
+        # kept as "valid" before being stripped — instead, the verdict
+        # should always be REJECTED_UNKNOWN_CLASS.
+        thresholds = {DamageType.SCRATCH.value: 0.50}
+        detector = DamageDetector(model_path="unused", thresholds=thresholds)
+        detector._model = _FakeYOLO(  # type: ignore[attr-defined]
+            names={0: "future_class_not_in_enum"},
+            results=[
+                _FakeResult(
+                    boxes=[_FakeBox(conf=[0.99], cls=[0])],
+                    names={0: "future_class_not_in_enum"},
+                    masks=None,
+                )
+            ],
+        )
+
+        detections = detector.predict(
+            crop_bytes=_jpeg_bytes(),
+            part_type="door",
+            request_id="r",
+            crop_index=0,
+            bucket="b",
+        )
+        # Enum filter rejects unknown labels regardless of confidence.
+        assert detections == []
+
+    def test_uniform_override_via_legacy_kwarg_applies_to_all_classes(self) -> None:
+        # Backward compatibility: callers that pass a single
+        # ``confidence_threshold`` (env-driven uniform override path,
+        # plus older unit tests) must still get uniform behaviour.
+        detector = DamageDetector(model_path="unused", confidence_threshold=0.7)
+        detector._model = _FakeYOLO(  # type: ignore[attr-defined]
+            names={0: DamageType.DENT.value, 1: DamageType.SCRATCH.value},
+            results=[
+                _FakeResult(
+                    boxes=[
+                        _FakeBox(conf=[0.65], cls=[0]),  # dent — would normally pass 0.25
+                        _FakeBox(conf=[0.75], cls=[1]),  # scratch — passes uniform 0.7
+                    ],
+                    names={0: DamageType.DENT.value, 1: DamageType.SCRATCH.value},
+                    masks=None,
+                )
+            ],
+        )
+
+        detections = detector.predict(
+            crop_bytes=_jpeg_bytes(),
+            part_type="door",
+            request_id="r",
+            crop_index=0,
+            bucket="b",
+        )
+        kinds = {d.damage_type for d in detections}
+        # 0.65 < 0.7 uniform → dent dropped; 0.75 > 0.7 → scratch kept.
+        assert kinds == {DamageType.SCRATCH.value}
+
+    def test_default_thresholds_come_from_ssot(self) -> None:
+        # No kwargs → detector reads DAMAGES_CONFIDENCE_BY_CLASS. This
+        # is the contract that prevents drift between the file at the
+        # SSOT location and the runtime behaviour.
+        from auto_repair_estimator.backend.domain.value_objects.ml_thresholds import (
+            DAMAGES_CONFIDENCE_BY_CLASS,
+        )
+
+        detector = DamageDetector(model_path="unused")
+        for damage_type, cutoff in DAMAGES_CONFIDENCE_BY_CLASS.items():
+            assert detector._thresholds[damage_type.value] == pytest.approx(cutoff)
 
 
 class TestDamageDetectorClassNameValidation:

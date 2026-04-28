@@ -46,7 +46,7 @@ class _YOLO:
         self.names = names
         self._results = results
 
-    def __call__(self, _img: Any, verbose: bool = False) -> list[_Result]:  # noqa: ARG002
+    def __call__(self, _img: Any, **_kwargs: Any) -> list[_Result]:
         return self._results
 
 

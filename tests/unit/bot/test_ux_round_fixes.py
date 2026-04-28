@@ -18,10 +18,11 @@ UX audit:
   have to scroll up to remember what else is in the basket.
 * **Back-to-parts and back-to-edit-list buttons (#3)**: each back
   handler restores the correct "upper" screen.
-* **Photo during manual flow nudges instead of spawning ML (#4)**:
-  dispatching ``handle_photo`` would create a second RepairRequest for
-  the same chat — the on_message handler must short-circuit before
-  that happens.
+
+Photo-during-any-flow behaviour moved into
+``test_session_lifecycle_v2.py`` after the single-active-session
+refactor — photos now always abandon-and-replace any prior session
+rather than being rejected, so the invariants under test changed shape.
 
 These tests intentionally operate at the handler / dispatch boundary
 (mocked ``BackendClient``, ``vkbottle.API``) because that is where the
