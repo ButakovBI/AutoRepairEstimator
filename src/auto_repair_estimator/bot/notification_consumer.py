@@ -1,15 +1,8 @@
 from __future__ import annotations
-import asyncio
-from datetime import datetime, timedelta, timezone
-from typing import Any
 
-# Moscow time — fixed offset because the operator team and every user
-# of this bot lives in GMT+3. Relying on the host's local timezone
-# (``datetime.astimezone()`` with no argument) would render UTC inside
-# the production container, so a request created at 14:00 MSK showed
-# up in the notification as "11:00" — the user's complaint that led to
-# this change.
-MOSCOW_TZ = timezone(timedelta(hours=3), name="MSK")
+import asyncio
+from datetime import UTC, datetime, timedelta, timezone
+from typing import Any
 
 from loguru import logger
 from vkbottle import API
@@ -18,6 +11,14 @@ from auto_repair_estimator.bot.backend_client import BackendClient
 from auto_repair_estimator.bot.handlers.damage_edit import send_inference_result
 from auto_repair_estimator.bot.keyboards.start import start_keyboard
 from auto_repair_estimator.bot.part_selection_send import send_part_selection_messages
+
+# Moscow time — fixed offset because the operator team and every user
+# of this bot lives in GMT+3. Relying on the host's local timezone
+# (``datetime.astimezone()`` with no argument) would render UTC inside
+# the production container, so a request created at 14:00 MSK showed
+# up in the notification as "11:00" — the user's complaint that led to
+# this change.
+MOSCOW_TZ = timezone(timedelta(hours=3), name="MSK")
 
 
 class NotificationConsumer:
@@ -172,7 +173,7 @@ class NotificationConsumer:
         except ValueError:
             return base
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         moscow_dt = dt.astimezone(MOSCOW_TZ)
         when = moscow_dt.strftime("%d.%m %H:%M")
         return (

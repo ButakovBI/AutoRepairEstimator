@@ -55,7 +55,6 @@ from typing import Final
 
 from auto_repair_estimator.backend.domain.value_objects.request_enums import DamageType
 
-
 # ─── Parts ────────────────────────────────────────────────────────────
 PARTS_CONFIDENCE_THRESHOLD: Final[float] = 0.5
 

@@ -37,7 +37,6 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Union
 
 from auto_repair_estimator.backend.domain.entities.detected_damage import DetectedDamage
 from auto_repair_estimator.backend.domain.value_objects.damage_severity import (
@@ -52,7 +51,7 @@ from auto_repair_estimator.backend.domain.value_objects.request_enums import (
 # Using a tagged tuple keeps the two namespaces disjoint so a manual
 # ``door`` (key=("type", PartType.DOOR)) never collides with an ML
 # ``door`` instance id (key=("id", "uuid-...")).
-_PartKey = tuple[str, Union[str, PartType]]
+_PartKey = tuple[str, str | PartType]
 
 
 def _part_key(damage: DetectedDamage) -> _PartKey:

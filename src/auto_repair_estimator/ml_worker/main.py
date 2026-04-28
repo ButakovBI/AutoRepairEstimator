@@ -22,7 +22,6 @@ from auto_repair_estimator.ml_worker.inference.preprocessor import preprocess
 from auto_repair_estimator.ml_worker.inference.result_publisher import ResultPublisher
 from auto_repair_estimator.ml_worker.s3_client import S3Client
 
-
 # Colour used for part-mask overlays. The composer already owns per-
 # damage colours in DAMAGE_COLORS; for parts we pick a single neutral
 # colour (cyan) since the diagnostic PNG only carries one part at a
