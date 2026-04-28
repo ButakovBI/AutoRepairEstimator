@@ -40,6 +40,9 @@ from auto_repair_estimator.backend.domain.interfaces.pricing_rule_repository imp
 from auto_repair_estimator.backend.domain.services.damage_aggregator import (
     aggregate_damages_for_pricing,
 )
+from auto_repair_estimator.backend.domain.value_objects.damage_severity import (
+    causes_replacement,
+)
 from auto_repair_estimator.backend.domain.value_objects.labels import DAMAGE_LABELS, PART_LABELS
 from auto_repair_estimator.backend.domain.value_objects.pricing_constants import (
     POLISH_COST_RUB,
@@ -47,6 +50,14 @@ from auto_repair_estimator.backend.domain.value_objects.pricing_constants import
     TYRE_SHOP_NOTE,
 )
 from auto_repair_estimator.backend.domain.value_objects.request_enums import DamageType, PartType
+
+# Breakdown row treatment markers. These surface in the API response so
+# the bot can render a "— замена" suffix without reimplementing the rule
+# that decides which damages imply a full-part replacement. Kept as
+# public string constants so integration-level test doubles can match
+# them without importing the enum.
+TREATMENT_REPLACEMENT = "replacement"
+TREATMENT_DEFAULT = "default"
 
 
 @dataclass
@@ -118,6 +129,16 @@ class PricingService:
                     "cost_max": rule.labor_cost_max,
                     "hours_min": rule.labor_hours_min,
                     "hours_max": rule.labor_hours_max,
+                    # Treatment is what the bot uses to decide whether to
+                    # render a clarifying "— замена" suffix. We key off
+                    # the domain predicate rather than hardcoding a set
+                    # here so a new replacement-class damage type gets
+                    # the label for free via ``damage_severity.py``.
+                    "treatment": (
+                        TREATMENT_REPLACEMENT
+                        if causes_replacement(damage.damage_type)
+                        else TREATMENT_DEFAULT
+                    ),
                 }
             )
 

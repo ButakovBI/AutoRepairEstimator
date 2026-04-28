@@ -90,18 +90,22 @@ Manual mode starts directly in PRICING state.
 
 1. **Parts Detection** (`yolov8m-seg`): 12 car parts (door, front/rear fender, trunk, hood, roof, headlight, front/rear windshield, side window, wheel, bumper). Confidence cutoff is defined once in `backend/domain/value_objects/ml_thresholds.py` (currently 0.5) — see that module for the rationale; ops can override at runtime via `PARTS_CONFIDENCE_THRESHOLD`.
 2. **Cropping**: crops every detected part; excluded parts are configurable via `MLWorkerConfig.crop_excluded_parts`.
-3. **Damage Detection** (`yolov8m-seg`): 8 damage types per crop (scratch, dent, paint_chip, rust, crack, broken_glass, flat_tire, broken_headlight). Confidence cutoff also lives in `ml_thresholds.py` (currently 0.2, deliberately low so every likely damage appears in the user-facing list for confirmation); override at runtime with `DAMAGES_CONFIDENCE_THRESHOLD`.
+3. **Damage Detection** (`yolov8m-seg`): 8 damage types per crop (scratch, dent, paint_chip, rust, crack, broken_glass, flat_tire, broken_headlight). **Per-class confidence cutoffs** live in `ml_thresholds.py` (`DAMAGES_CONFIDENCE_BY_CLASS`) — edit that single file to retune any class. Current calibration: scratch & flat_tire 0.50, broken_glass & broken_headlight 0.40, rust & paint_chip 0.30, dent & crack 0.25. The env knob `DAMAGES_CONFIDENCE_THRESHOLD` still works as a **uniform** runtime override across all classes (panic knob for ops experiments).
 4. **Composition**: alpha-blend masks onto original image.
 5. **Result**: publish to Kafka `inference_results` topic.
 
 ### Training Models
 
-```bash
-python ml/train_parts.py --data data/parts.yaml --epochs 100
-python ml/train_damages.py --data data/damages.yaml --epochs 100
-python ml/evaluate.py --model runs/parts/parts_seg_v1/weights/best.pt --data data/parts.yaml
-python ml/export_model.py --model runs/parts/.../best.pt --output docker/models/parts.pt
+See `scripts/ml/README.md` and `scripts/ml/colab_train.ipynb`. After training,
+copy weights into the volume the worker mounts (`docker/models/`):
+
+```powershell
+Copy-Item -Force test\best_details_2104_1133.pt docker\models\parts.pt
+Copy-Item -Force test\best_damages_21041256.pt docker\models\damages.pt
+docker compose -f docker/docker-compose.yml restart ml_worker
 ```
+
+(Adjust source paths when you train new checkpoints; names **`parts.pt`** and **`damages.pt`** are fixed in `MLWorkerConfig`.)
 
 ## Testing
 

@@ -1,7 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from auto_repair_estimator.backend.domain.value_objects.ml_thresholds import (
-    DAMAGES_CONFIDENCE_THRESHOLD,
     PARTS_CONFIDENCE_THRESHOLD,
 )
 
@@ -23,12 +22,17 @@ class MLWorkerConfig(BaseSettings):
 
     parts_model_path: str = "/app/models/parts.pt"
     damages_model_path: str = "/app/models/damages.pt"
-    # Defaults come from the domain SSOT so the ML worker, backend and
-    # tests all agree on the same business-level cutoffs. Operators can
-    # still override via env (PARTS_CONFIDENCE_THRESHOLD /
-    # DAMAGES_CONFIDENCE_THRESHOLD) without a rebuild.
+    # Parts: single threshold; default comes from the domain SSOT so
+    # the ML worker, backend and tests all agree on the same cutoff.
+    # Env PARTS_CONFIDENCE_THRESHOLD overrides without a rebuild.
     parts_confidence_threshold: float = PARTS_CONFIDENCE_THRESHOLD
-    damages_confidence_threshold: float = DAMAGES_CONFIDENCE_THRESHOLD
+    # Damages: per-class thresholds live in ml_thresholds.py
+    # (DAMAGES_CONFIDENCE_BY_CLASS). This field stays None by default —
+    # the detector reads the per-class SSOT directly. If an operator
+    # sets env DAMAGES_CONFIDENCE_THRESHOLD to a number, that value
+    # acts as a UNIFORM override across ALL damage classes (panic
+    # knob for runtime experiments without rebuilding the image).
+    damages_confidence_threshold: float | None = None
     max_image_bytes: int = 10 * 1024 * 1024
 
     # Comma-separated list of PartType values to skip during cropping.

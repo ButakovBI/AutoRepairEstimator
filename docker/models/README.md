@@ -17,12 +17,23 @@ a warning for any unknown class; unknown classes are also silently skipped
 at inference time so the backend never receives an enum value it cannot
 store.
 
+## Currently deployed (local dev volume)
+
+Last copied from Colab checkpoints (stratified train/val/test split, 2026-04-21):
+
+| `parts.pt`   | `test/best_details_2104_1133.pt`   |
+| `damages.pt` | `test/best_damages_21041256.pt`     |
+
+Re-copy after retraining: same two `Copy-Item` lines as in the repo root
+README ML section, or any path to your new `best.pt` files.
+
 ## How to deploy new weights
 
-1. Train the model — see `ml/train_damages.py` and `ml/train_parts.py`
-   (datasets declared in `ml/data/*.yaml`).
-2. Copy the resulting `best.pt` into this directory under the exact name
-   the worker expects (`damages.pt` or `parts.pt`).
+1. Train the models — see `scripts/ml/train_parts.py`,
+   `scripts/ml/train_damages.py`, and `scripts/ml/README.md` (datasets under
+   `test/parts/` and `test/damages/` after `split_dataset.py`).
+2. Copy the resulting `best.pt` into this directory under the exact names
+   `parts.pt` and `damages.pt`.
 3. Restart the worker: `docker compose -f docker/docker-compose.yml restart ml_worker`.
 
 Weights are **not** committed to git (see `.gitignore` — `docker/models/*.pt`).

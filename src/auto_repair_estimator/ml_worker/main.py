@@ -8,6 +8,7 @@ from typing import Any
 from aiokafka import AIOKafkaConsumer
 from loguru import logger
 
+from auto_repair_estimator.backend.domain.value_objects.request_enums import DamageType
 from auto_repair_estimator.ml_worker.config import get_config
 from auto_repair_estimator.ml_worker.inference.composer import DAMAGE_COLORS, DEFAULT_COLOR, compose
 from auto_repair_estimator.ml_worker.inference.cropper import crop_parts
@@ -243,9 +244,26 @@ async def main() -> None:
         model_path=parts_model_path or config.parts_model_path,
         confidence_threshold=config.parts_confidence_threshold,
     )
+    # Damages: pass an explicit per-class mapping only when the
+    # operator set an env-level uniform override (then ALL classes get
+    # that single value). Otherwise pass None so the detector reads
+    # the per-class SSOT from ml_thresholds.py — keeping the policy
+    # in one place that's easy to audit and edit.
+    damage_thresholds: dict[str, float] | None
+    if config.damages_confidence_threshold is not None:
+        damage_thresholds = {
+            dt.value: config.damages_confidence_threshold for dt in DamageType
+        }
+        logger.warning(
+            "DAMAGES_CONFIDENCE_THRESHOLD env override active: applying uniform "
+            "cutoff {:.2f} to all damage classes (per-class SSOT bypassed)",
+            config.damages_confidence_threshold,
+        )
+    else:
+        damage_thresholds = None
     damage_detector = DamageDetector(
         model_path=damages_model_path or config.damages_model_path,
-        confidence_threshold=config.damages_confidence_threshold,
+        thresholds=damage_thresholds,
     )
 
     publisher = ResultPublisher(

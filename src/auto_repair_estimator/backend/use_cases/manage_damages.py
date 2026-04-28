@@ -92,6 +92,7 @@ class AddDamageInput:
 @dataclass
 class AddDamageResult:
     damage: DetectedDamage
+    already_existed: bool = False
 
 
 class AddDamageUseCase:
@@ -112,6 +113,25 @@ class AddDamageUseCase:
         if data.source is DamageSource.MANUAL:
             _ensure_compatible(data.part_type, data.damage_type)
 
+        # Domain invariant: at most one active damage per
+        # ``(part_type, damage_type)`` within a request. The user expects
+        # adding "Door — Scratch" twice to be a no-op rather than grow
+        # the basket; the ML ingestion surface enforces the same
+        # contract. Idempotent response keeps the handler logic simple
+        # (always a DamageResponse, no 409 branching) — the caller
+        # surfaces the ``already_existed`` flag as a soft info message.
+        existing = await self._find_existing_active(
+            data.request_id, data.part_type, data.damage_type
+        )
+        if existing is not None:
+            await _extend_timeout(self._requests, request)
+            logger.info(
+                "Add-damage is a no-op — same pair already active id={} request_id={}",
+                existing.id,
+                existing.request_id,
+            )
+            return AddDamageResult(damage=existing, already_existed=True)
+
         damage = DetectedDamage(
             id=str(uuid4()),
             request_id=data.request_id,
@@ -126,7 +146,27 @@ class AddDamageUseCase:
         await self._damages.add(damage)
         await _extend_timeout(self._requests, request)
         logger.info("Added damage id={} request_id={}", damage.id, damage.request_id)
-        return AddDamageResult(damage=damage)
+        return AddDamageResult(damage=damage, already_existed=False)
+
+    async def _find_existing_active(
+        self, request_id: str, part_type: PartType, damage_type: DamageType
+    ) -> DetectedDamage | None:
+        """Return the active damage matching ``(part_type, damage_type)``, if any.
+
+        Walks the request's current damage list; O(n) is fine because a
+        basket large enough for this to matter would already have hit the
+        UI-level pagination cap. Soft-deleted damages are ignored: a user
+        who deleted "Door — Scratch" and adds it again should get a fresh
+        entry, not the zombified old one.
+        """
+
+        damages = await self._damages.get_by_request_id(request_id)
+        for damage in damages:
+            if damage.is_deleted:
+                continue
+            if damage.part_type is part_type and damage.damage_type is damage_type:
+                return damage
+        return None
 
 
 @dataclass
@@ -200,6 +240,16 @@ class EditDamageUseCase:
         )
         await self._damages.update(updated)
 
+        # Merge-on-conflict. If the edited (part, damage_type) pair now
+        # collides with another active damage on the same request, soft-
+        # delete the sibling rather than letting two duplicates coexist.
+        # We keep the one being edited because it carries the user's
+        # latest intent; dropping it would feel like "the click did
+        # nothing" from the user's POV. This is the third enforcement
+        # point of the uniqueness invariant (ingestion / add / edit) —
+        # each pattern of introducing dups has its own surface.
+        await self._merge_on_conflict(updated)
+
         if self._requests is not None:
             request = await self._requests.get(damage.request_id)
             if request is not None:
@@ -212,6 +262,33 @@ class EditDamageUseCase:
             new_part_type,
         )
         return EditDamageResult(damage=updated)
+
+    async def _merge_on_conflict(self, edited: DetectedDamage) -> None:
+        """Soft-delete siblings that match ``edited``'s ``(part, damage)`` pair.
+
+        Retyping ``Door — Scratch`` to ``Crack`` on a request that already
+        has a ``Door — Crack`` would otherwise violate the uniqueness
+        invariant. We leave ``edited`` alone and flag the duplicates as
+        deleted. Iterates and deletes one-by-one because the repo
+        interface is deliberately minimal (no bulk ops).
+        """
+
+        siblings = await self._damages.get_by_request_id(edited.request_id)
+        for sibling in siblings:
+            if sibling.id == edited.id or sibling.is_deleted:
+                continue
+            if (
+                sibling.part_type is edited.part_type
+                and sibling.damage_type is edited.damage_type
+            ):
+                await self._damages.soft_delete(sibling.id)
+                logger.info(
+                    "Merged duplicate damage id={} into edited id={} on pair=({}, {})",
+                    sibling.id,
+                    edited.id,
+                    edited.part_type.value,
+                    edited.damage_type.value,
+                )
 
 
 @dataclass

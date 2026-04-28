@@ -193,6 +193,12 @@ class DamageResponse(BaseModel):
     damage_type: DamageType
     source: str
     is_deleted: bool
+    # ``already_existed`` is only set by the add-damage endpoint when the
+    # same ``(part_type, damage_type)`` pair was already active on the
+    # request — the response then echoes the existing row. Edit/delete
+    # responses leave this field at its default. Optional so clients
+    # that predate the field continue to deserialize correctly.
+    already_existed: bool = False
 
 
 class PricingResponse(BaseModel):
@@ -336,7 +342,12 @@ async def add_damage(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     d = result.damage
     return DamageResponse(
-        id=d.id, part_type=d.part_type, damage_type=d.damage_type, source=d.source.value, is_deleted=d.is_deleted
+        id=d.id,
+        part_type=d.part_type,
+        damage_type=d.damage_type,
+        source=d.source.value,
+        is_deleted=d.is_deleted,
+        already_existed=result.already_existed,
     )
 
 

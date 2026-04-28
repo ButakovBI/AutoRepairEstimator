@@ -6,27 +6,53 @@ from vkbottle import API
 from vkbottle.bot import Message
 
 from auto_repair_estimator.bot.backend_client import BackendClient
+from auto_repair_estimator.bot.session_lifecycle import (
+    PREVIOUS_REQUEST_ABANDONED_NOTICE,
+    abandon_active_session,
+)
+
+MULTIPLE_PHOTOS_NOTICE = (
+    "За один раз можно обработать только одну фотографию — беру первую. "
+    "Если хотите проанализировать и остальные, отправьте их по одной "
+    "после получения результата."
+)
 
 
 async def handle_photo(message: Message, backend: BackendClient, api: API) -> None:
-    """Handle one or more photo attachments in a single VK message.
+    """Handle photo attachments, enforcing the single-active-session invariant.
 
-    VK allows up to 10 attachments per message. For each photo we create a
-    separate ML ``RepairRequest`` so the user can receive per-photo results.
+    Two invariants matter here:
+
+    * **One active session per chat.** If the chat has a non-terminal
+      :class:`RepairRequest` (ML mid-flight, manual session with half-
+      added damages, …), we abandon it *before* starting the new ML
+      one. The user is told what happened through the shared
+      ``PREVIOUS_REQUEST_ABANDONED_NOTICE`` prefix so nobody loses
+      progress silently.
+    * **One photo per message.** VK lets a single message carry up to
+      10 attachments. Processing them all used to create 10 parallel
+      ML requests — a fan-out that directly violates the first
+      invariant and made the bot unusable if the user photoed a car
+      from every angle and sent them at once. We now process only the
+      first photo and tell the user the others were skipped.
     """
 
     photos = message.get_photo_attachments()
     if not photos:
         return
 
-    total = len(photos)
-    if total > 1:
-        await message.answer(f"Принято {total} фото. Обрабатываю каждое отдельной заявкой, подождите...")
-    else:
-        await message.answer("Загружаю фотографию, подождите...")
-
     peer_id = message.peer_id
     user_id = message.from_id
+    total = len(photos)
+
+    intro_parts: list[str] = []
+    abandoned = await abandon_active_session(backend, peer_id)
+    if abandoned is not None:
+        intro_parts.append(PREVIOUS_REQUEST_ABANDONED_NOTICE)
+    if total > 1:
+        intro_parts.append(MULTIPLE_PHOTOS_NOTICE)
+    intro_parts.append("Загружаю фотографию, подождите...")
+    await message.answer("\n\n".join(intro_parts))
 
     # VK's conversation_message_id is the most stable per-chat message
     # identifier; combined with peer_id it forms a dedup key that survives
@@ -37,38 +63,34 @@ async def handle_photo(message: Message, backend: BackendClient, api: API) -> No
         or getattr(message, "id", None)
         or 0
     )
+    # Index "1" is baked into the key so VK redeliveries of the exact
+    # same message collapse to the same RepairRequest via idempotency,
+    # while a genuinely new photo in a new VK message gets a fresh one.
+    idem_key = f"{peer_id}:{base_message_id}:1"
 
-    success = 0
-    for index, photo in enumerate(photos, start=1):
-        # Per-photo key — if the user sends the same N photos twice, each
-        # attachment position deduplicates independently.
-        idem_key = f"{peer_id}:{base_message_id}:{index}"
-        try:
-            await _process_single_photo(
-                message,
-                backend,
-                photo,
-                peer_id=peer_id,
-                user_id=user_id,
-                index=index,
-                idempotency_key=idem_key,
-            )
-            success += 1
-        except Exception as exc:
-            logger.error("Failed to process photo {}/{}: {}", index, total, exc)
-
-    if success == 0:
-        await message.answer("Не удалось обработать фотографии. Попробуйте ещё раз или используйте ручной ввод.")
+    first_photo = photos[0]
+    try:
+        await _process_single_photo(
+            message,
+            backend,
+            first_photo,
+            peer_id=peer_id,
+            user_id=user_id,
+            index=1,
+            idempotency_key=idem_key,
+        )
+    except Exception as exc:
+        logger.error("Failed to process photo: {}", exc)
+        await message.answer(
+            "Не удалось обработать фотографию. Попробуйте ещё раз "
+            "или используйте ручной ввод."
+        )
         return
 
-    if total == 1:
-        await message.answer(
-            "Фотография получена. Запрос обрабатывается (~15 секунд).\nЯ пришлю результат, когда будет готово."
-        )
-    else:
-        await message.answer(
-            f"Принято {success} из {total} фото. По каждому я пришлю отдельный результат (~15 секунд на фото)."
-        )
+    await message.answer(
+        "Фотография получена. Запрос обрабатывается (~15 секунд).\n"
+        "Я пришлю результат, когда будет готово."
+    )
 
 
 async def _process_single_photo(

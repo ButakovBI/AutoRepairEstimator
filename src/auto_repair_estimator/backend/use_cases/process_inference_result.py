@@ -119,8 +119,24 @@ class ProcessInferenceResultUseCase:
                     data.request_id,
                     len(existing_parts),
                 )
+                # Rebuild the notification payload from the damages
+                # actually persisted during the prior partial run —
+                # echoing ``data.damages`` verbatim would leak the raw
+                # (duplicate-heavy) detector output into the user's view
+                # and desync from what the edit screen will show.
+                existing_damages = await self._damages.get_by_request_id(data.request_id)
+                replayed_pairs = [
+                    (d.part_type.value, d.damage_type.value)
+                    for d in existing_damages
+                    if not d.is_deleted
+                ]
                 updated_request = await self._update_request_status(request, data)
-                await self._create_notification_event(updated_request, data, is_success=data.status == "success")
+                await self._create_notification_event(
+                    updated_request,
+                    data,
+                    is_success=data.status == "success",
+                    persisted_damage_pairs=replayed_pairs,
+                )
                 return
 
         if request.status is RequestStatus.QUEUED:
@@ -129,14 +145,23 @@ class ProcessInferenceResultUseCase:
 
         is_success = data.status == "success"
         saved_parts: list[DetectedPart] = []
+        persisted_damage_pairs: list[tuple[str, str]] = []
 
         if is_success:
             saved_parts = await self._save_parts(data)
             part_by_type = {p.part_type.value: p for p in saved_parts}
-            await self._save_damages(data, part_by_type)
+            persisted_damage_pairs = await self._save_damages(data, part_by_type)
 
         updated_request = await self._update_request_status(request, data)
-        await self._create_notification_event(updated_request, data, is_success)
+        # Pass the post-dedup, post-persist list of pairs to the notification
+        # layer so the "Обнаруженные повреждения" card the user sees in VK
+        # is identical to what the backend actually stored. Before this
+        # change the notification echoed the raw detector output (26
+        # "Бампер — Царапина" from a single scratched bumper), which both
+        # spammed the chat and desynced from the edit screen.
+        await self._create_notification_event(
+            updated_request, data, is_success, persisted_damage_pairs
+        )
 
         logger.info(
             "Processed inference result for request={} status={} parts={} damages={}",
@@ -168,8 +193,39 @@ class ProcessInferenceResultUseCase:
                 logger.warning("Skipping unknown part_type={}: {}", p.part_type, exc)
         return parts
 
-    async def _save_damages(self, data: ProcessInferenceResultInput, part_by_type: dict[str, DetectedPart]) -> None:
+    async def _save_damages(
+        self, data: ProcessInferenceResultInput, part_by_type: dict[str, DetectedPart]
+    ) -> list[tuple[str, str]]:
+        """Persist ML damages with ``(part_type, damage_type)`` uniqueness.
+
+        The detector frequently emits multiple masks for the same class on
+        the same part (17 scratches on one door, 12 on a bumper). Saving
+        each one separately spams the user's edit screen and forces the
+        pricing aggregator to collapse them later anyway — the business
+        rule is "one painting per painted part, one replacement per
+        replaced part", not "one priced row per mask". We enforce the
+        uniqueness invariant at ingestion, the earliest surface where it
+        can be expressed, so every downstream surface (edit UI, pricing,
+        notifications) sees a clean, deduplicated basket.
+
+        The first detection in iteration order wins. Detection order is
+        effectively confidence-sorted coming out of the ML worker, so the
+        highest-confidence representative survives — this matches the
+        `damage_aggregator` tie-break and keeps audit logs stable.
+
+        Returns the ordered ``(part_type, damage_type)`` pairs that were
+        actually persisted so the caller can forward them to the
+        notification payload.
+        """
+
+        seen: set[tuple[str, str]] = set()
+        duplicates_dropped = 0
+        persisted_pairs: list[tuple[str, str]] = []
         for d in data.damages:
+            key = (d.part_type, d.damage_type)
+            if key in seen:
+                duplicates_dropped += 1
+                continue
             try:
                 linked_part = part_by_type.get(d.part_type)
                 damage = DetectedDamage(
@@ -183,9 +239,26 @@ class ProcessInferenceResultUseCase:
                     confidence=d.confidence,
                     mask_image_key=d.mask_image_key,
                 )
-                await self._damages.add(damage)
             except (ValueError, KeyError) as exc:
-                logger.warning("Skipping unknown damage_type={} or part_type={}: {}", d.damage_type, d.part_type, exc)
+                logger.warning(
+                    "Skipping unknown damage_type={} or part_type={}: {}",
+                    d.damage_type,
+                    d.part_type,
+                    exc,
+                )
+                continue
+            await self._damages.add(damage)
+            seen.add(key)
+            persisted_pairs.append(key)
+
+        if duplicates_dropped:
+            logger.info(
+                "ProcessInferenceResult: collapsed {} duplicate (part, damage) "
+                "pairs for request={} before persistence",
+                duplicates_dropped,
+                data.request_id,
+            )
+        return persisted_pairs
 
     async def _update_request_status(self, request: RepairRequest, data: ProcessInferenceResultInput) -> RepairRequest:
         # Stamp the worker's ``error_message`` on the request on the
@@ -217,15 +290,33 @@ class ProcessInferenceResultUseCase:
         return priced
 
     async def _create_notification_event(
-        self, request: RepairRequest, data: ProcessInferenceResultInput, is_success: bool
+        self,
+        request: RepairRequest,
+        data: ProcessInferenceResultInput,
+        is_success: bool,
+        persisted_damage_pairs: list[tuple[str, str]] | None = None,
     ) -> None:
         notification_type = "inference_complete" if is_success else "inference_failed"
+        # Prefer the post-dedup list — that's what the DB actually holds,
+        # and what the edit screen will show. Fall back to the raw
+        # detector output on the failure branch (no persistence happened
+        # there) so we still have something for the bot to log.
+        if persisted_damage_pairs is not None:
+            notification_damages = [
+                {"damage_type": dt, "part_type": pt}
+                for pt, dt in persisted_damage_pairs
+            ]
+        else:
+            notification_damages = [
+                {"damage_type": d.damage_type, "part_type": d.part_type}
+                for d in data.damages
+            ]
         payload: dict[str, Any] = {
             "chat_id": request.chat_id,
             "request_id": request.id,
             "type": notification_type,
             "composited_image_key": data.composited_image_key,
-            "damages": [{"damage_type": d.damage_type, "part_type": d.part_type} for d in data.damages],
+            "damages": notification_damages,
         }
         # For the failure branch the worker sends a short ``error_message``
         # string ("no_parts_detected", "inference_failed", ...) — pipe it

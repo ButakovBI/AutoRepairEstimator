@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
 
 from auto_repair_estimator.backend.domain.value_objects.ml_thresholds import (
-    DAMAGES_CONFIDENCE_THRESHOLD,
+    DAMAGES_CONFIDENCE_BY_CLASS,
+    DAMAGES_CONFIDENCE_FLOOR,
 )
 from auto_repair_estimator.backend.domain.value_objects.part_damage_compatibility import (
     PART_DAMAGE_COMPATIBILITY,
@@ -36,14 +38,47 @@ class DamageDetection:
 
 
 class DamageDetector:
-    # Default from SSOT — see the matching note in PartsDetector.
+    """YOLO-backed damage detector with **per-class** confidence cutoffs.
+
+    Threshold resolution (highest priority first):
+
+    1. ``thresholds`` kwarg — explicit per-class mapping. Used by the
+       ML worker when an operator sets a uniform env-override (the
+       worker expands the single value into a full mapping there) and
+       by tests that want a fully custom calibration.
+    2. ``confidence_threshold`` kwarg — single float treated as a
+       *uniform* override across all damage classes. Kept for
+       backward compatibility with older callers and unit tests.
+    3. Default — :data:`DAMAGES_CONFIDENCE_BY_CLASS` from
+       ``ml_thresholds.py`` (the production policy).
+
+    The model itself is invoked with ``conf=floor`` where ``floor`` is
+    the minimum cutoff in the resolved mapping, so low-threshold
+    classes still survive Ultralytics' built-in NMS pre-filter and
+    reach our per-class check.
+    """
+
     def __init__(
         self,
         model_path: str,
-        confidence_threshold: float = DAMAGES_CONFIDENCE_THRESHOLD,
+        confidence_threshold: float | None = None,
+        thresholds: Mapping[str, float] | None = None,
     ) -> None:
         self._model_path = model_path
-        self._threshold = confidence_threshold
+
+        if thresholds is not None:
+            resolved: dict[str, float] = dict(thresholds)
+        elif confidence_threshold is not None:
+            resolved = {dt.value: confidence_threshold for dt in DamageType}
+        else:
+            resolved = {dt.value: cutoff for dt, cutoff in DAMAGES_CONFIDENCE_BY_CLASS.items()}
+
+        self._thresholds: Mapping[str, float] = resolved
+        # Floor must never exceed the smallest configured cutoff,
+        # otherwise YOLO would silently filter low-threshold classes
+        # before our code sees them. Falling back to the SSOT floor
+        # when ``resolved`` is empty (defensive — shouldn't happen).
+        self._floor: float = min(resolved.values()) if resolved else DAMAGES_CONFIDENCE_FLOOR
         self._model: Any | None = None
 
     def load(self) -> None:
@@ -104,7 +139,11 @@ class DamageDetector:
         from PIL import Image
 
         img = Image.open(io.BytesIO(crop_bytes)).convert("RGB")
-        results = self._model(img, verbose=False)
+        # ``conf=self._floor`` ensures Ultralytics' internal pre-filter
+        # doesn't silently drop classes whose per-class threshold is
+        # lower than YOLO's default 0.25 — without this we'd lie about
+        # the per-class numbers configured in ml_thresholds.py.
+        results = self._model(img, verbose=False, conf=self._floor)
         detections: list[DamageDetection] = []
         dropped_unknown = 0
         dropped_incompatible = 0
@@ -112,8 +151,9 @@ class DamageDetector:
         # log line at the end of the call. Operators routinely ask "why
         # didn't the model see that dent?" — with this trace the answer
         # is one ``docker logs | grep`` away instead of requiring a
-        # re-run with a debugger.
-        raw_tally: list[tuple[str, float, str]] = []
+        # re-run with a debugger. Each entry is (class, conf, cutoff,
+        # verdict) so per-class thresholds are auditable post-mortem.
+        raw_tally: list[tuple[str, float, float, str]] = []
 
         # Resolve the compatibility set for the host part once per call.
         # If ``part_type`` isn't a known :class:`PartType` (e.g. a crop
@@ -131,14 +171,19 @@ class DamageDetector:
                 confidence = float(box.conf[0])
                 class_id = int(box.cls[0])
                 damage_type = names[class_id]
+                # Per-class cutoff lookup: unknown classes fall back to
+                # the floor, but they're rejected by the enum filter
+                # below anyway — the cutoff is recorded purely for the
+                # audit log so operators can reason about the decision.
+                cutoff = self._thresholds.get(damage_type, self._floor)
 
-                if confidence < self._threshold:
-                    raw_tally.append((damage_type, confidence, "REJECTED_LOW_CONF"))
+                if confidence < cutoff:
+                    raw_tally.append((damage_type, confidence, cutoff, "REJECTED_LOW_CONF"))
                     continue
 
                 if damage_type not in _SUPPORTED_DAMAGE_NAMES:
                     dropped_unknown += 1
-                    raw_tally.append((damage_type, confidence, "REJECTED_UNKNOWN_CLASS"))
+                    raw_tally.append((damage_type, confidence, cutoff, "REJECTED_UNKNOWN_CLASS"))
                     continue
 
                 # Part ↔ damage compatibility filter.
@@ -150,7 +195,7 @@ class DamageDetector:
                 # system-of-record or the user-facing "found damages" list.
                 if allowed_damages is not None and damage_type not in allowed_damages:
                     dropped_incompatible += 1
-                    raw_tally.append((damage_type, confidence, "REJECTED_INCOMPATIBLE"))
+                    raw_tally.append((damage_type, confidence, cutoff, "REJECTED_INCOMPATIBLE"))
                     continue
 
                 mask = masks.data[i].cpu().numpy() if masks is not None else None
@@ -168,7 +213,7 @@ class DamageDetector:
                         crop_box_pixels=crop_box_pixels,
                     )
                 )
-                raw_tally.append((damage_type, confidence, "ACCEPTED"))
+                raw_tally.append((damage_type, confidence, cutoff, "ACCEPTED"))
 
         if dropped_unknown:
             logger.warning(
@@ -190,15 +235,18 @@ class DamageDetector:
             )
 
         summary = sorted(raw_tally, key=lambda entry: -entry[1])
-        summary_str = ", ".join(f"{cls}@{conf:.2f}:{verdict}" for cls, conf, verdict in summary) or "<none>"
+        summary_str = (
+            ", ".join(f"{cls}@{conf:.2f}/cut@{cut:.2f}:{verdict}" for cls, conf, cut, verdict in summary)
+            or "<none>"
+        )
         logger.info(
-            "DamageDetector[request={} crop={} part={}] raw={} accepted={} threshold={:.2f} | {}",
+            "DamageDetector[request={} crop={} part={}] raw={} accepted={} floor={:.2f} | {}",
             request_id,
             crop_index,
             part_type,
             len(raw_tally),
             len(detections),
-            self._threshold,
+            self._floor,
             summary_str,
         )
         return detections

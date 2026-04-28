@@ -11,7 +11,12 @@ from auto_repair_estimator.backend.domain.value_objects.request_enums import (
     DamageType,
     PartType,
 )
+from auto_repair_estimator.bot.damage_grouping import DamageGroup, group_damages
 from auto_repair_estimator.bot.labels import DAMAGE_LABELS, PART_LABELS
+from auto_repair_estimator.bot.vk_limits import (
+    VK_INLINE_DEFAULT_BUTTONS_PER_ROW,
+    VK_INLINE_MAX_BUTTONS,
+)
 
 
 def inference_result_keyboard(request_id: str) -> str:
@@ -21,54 +26,115 @@ def inference_result_keyboard(request_id: str) -> str:
     return kb.get_json()
 
 
-# VK caps each inline keyboard at 10 buttons and 6 rows. We reserve two
-# buttons for the trailing "Add / Confirm" controls, which leaves at most
-# 8 per-damage buttons. Packing two damages per row keeps us under the
-# 6-row cap for up to 8 simultaneous damages — beyond that we drop the
-# tail and nudge the user to confirm or remove extras, which is vastly
-# better UX than sending a keyboard VK silently refuses.
-_DAMAGE_ROWS_AVAILABLE = 4
-_DAMAGES_PER_ROW = 2
-_MAX_DAMAGES_IN_EDIT_KB = _DAMAGE_ROWS_AVAILABLE * _DAMAGES_PER_ROW  # 8
+# VK caps each inline keyboard at 10 buttons and 6 rows. The edit screen
+# now paginates across multiple messages (damage_edit_keyboards_list) so
+# we never silently drop groups past a hard cap. Per-page limits:
+#
+#   * non-last page: up to 10 group buttons (fills the keyboard).
+#   * last page:     up to 8 group buttons + two trailing action buttons
+#                    ("Добавить повреждение" and "Готово").
+_GROUPS_PER_LAST_PAGE = VK_INLINE_MAX_BUTTONS - 2  # 8
+_GROUPS_PER_INNER_PAGE = VK_INLINE_MAX_BUTTONS     # 10
 
 
-def damage_edit_keyboard(request_id: str, damages: list[dict[str, Any]]) -> str:
-    kb = Keyboard(inline=True)
-    visible = damages[:_MAX_DAMAGES_IN_EDIT_KB]
+def _group_button_label(group: DamageGroup) -> str:
+    part_label = PART_LABELS.get(group.part_type, group.part_type or "?")
+    damage_label = DAMAGE_LABELS.get(group.damage_type, group.damage_type or "?")
+    if group.count > 1:
+        # The "×N" suffix is the single signal the user gets that tapping
+        # this button opens a group sub-menu rather than the per-damage
+        # edit flow (bug: 17 scratches on a door overflowed VK limits).
+        return f"{part_label} — {damage_label} (×{group.count})"
+    return f"{part_label} — {damage_label}"
 
-    for i, damage in enumerate(visible, 1):
-        part_type_value = damage.get("part_type", "")
-        part_label = PART_LABELS.get(part_type_value, part_type_value)
-        damage_label = DAMAGE_LABELS.get(damage.get("damage_type", ""), damage.get("damage_type", ""))
-        damage_id = damage.get("id", "")
-        # One collapsed "manage" button per damage: tapping opens a sub-menu
-        # with damage-type choices and a Delete button. The sub-menu must
-        # filter damage types by the current part (headlight -> only
-        # broken_headlight, etc.), so we propagate ``pt`` through the
-        # callback payload — otherwise the sub-handler would have to refetch
-        # the damage from the backend just to know the part.
+
+def _group_button_payload(request_id: str, group: DamageGroup) -> dict[str, Any]:
+    """Route N=1 to the legacy single-damage sub-menu and N>1 to ``grp`` cmd.
+
+    Keeping the N=1 path on the existing ``edit/edit_type`` cmd avoids a
+    needless extra round-trip for the common "revise one damage" case
+    and means existing tests and handlers keep working unchanged.
+    """
+
+    if group.count == 1:
+        return {
+            "cmd": "edit",
+            "a": "edit_type",
+            "rid": request_id,
+            "did": group.damage_ids[0],
+            "pt": group.part_type,
+        }
+    return {
+        "cmd": "grp",
+        "a": "open",
+        "rid": request_id,
+        "pt": group.part_type,
+        "dt": group.damage_type,
+    }
+
+
+def _append_group_buttons(kb: Keyboard, request_id: str, groups: list[DamageGroup]) -> None:
+    for i, group in enumerate(groups):
         kb.add(
             Callback(
-                f"{i}. {part_label} — {damage_label}",
-                payload={
-                    "cmd": "edit",
-                    "a": "edit_type",
-                    "rid": request_id,
-                    "did": damage_id,
-                    "pt": part_type_value,
-                },
+                _group_button_label(group),
+                payload=_group_button_payload(request_id, group),
             )
         )
-        if i % _DAMAGES_PER_ROW == 0 and i != len(visible):
+        if (i + 1) % VK_INLINE_DEFAULT_BUTTONS_PER_ROW == 0 and i < len(groups) - 1:
             kb.row()
 
-    kb.row()
-    kb.add(Callback("Добавить повреждение", payload={"cmd": "addmore", "rid": request_id}))
-    kb.add(
-        Callback("Готово", payload={"cmd": "confirm", "rid": request_id}),
-        color=KeyboardButtonColor.POSITIVE,
-    )
-    return kb.get_json()
+
+def _paginate_groups(groups: list[DamageGroup]) -> list[list[DamageGroup]]:
+    """Split groups so each VK message stays within the inline-keyboard cap.
+
+    All non-last pages are filled to ``_GROUPS_PER_INNER_PAGE`` buttons,
+    leaving the trailing action buttons for the last page only. For the
+    degenerate empty case we return a single empty page so the caller
+    can still render the add/confirm controls.
+    """
+
+    if not groups:
+        return [[]]
+
+    pages: list[list[DamageGroup]] = []
+    remaining = list(groups)
+    while len(remaining) > _GROUPS_PER_LAST_PAGE:
+        pages.append(remaining[:_GROUPS_PER_INNER_PAGE])
+        remaining = remaining[_GROUPS_PER_INNER_PAGE:]
+    pages.append(remaining)
+    return pages
+
+
+def damage_edit_keyboards_list(
+    request_id: str, damages: list[dict[str, Any]]
+) -> list[str]:
+    """Return one JSON keyboard per VK message for the edit flow.
+
+    Replaces the old ``damage_edit_keyboard`` (single keyboard with a
+    hard 8-damage cap). The last page is always the one with the
+    "Добавить повреждение" / "Готово" buttons even when the list is
+    empty, so the caller can emit it unconditionally.
+    """
+
+    groups = group_damages(damages)
+    pages = _paginate_groups(groups)
+    keyboards: list[str] = []
+    for page_index, page_groups in enumerate(pages):
+        is_last_page = page_index == len(pages) - 1
+        kb = Keyboard(inline=True)
+        if page_groups:
+            _append_group_buttons(kb, request_id, page_groups)
+        if is_last_page:
+            if page_groups:
+                kb.row()
+            kb.add(Callback("Добавить повреждение", payload={"cmd": "addmore", "rid": request_id}))
+            kb.add(
+                Callback("Готово", payload={"cmd": "confirm", "rid": request_id}),
+                color=KeyboardButtonColor.POSITIVE,
+            )
+        keyboards.append(kb.get_json())
+    return keyboards
 
 
 def _allowed_damage_values_for(part_type: str) -> list[str]:
@@ -118,9 +184,105 @@ def edit_damage_type_keyboard(request_id: str, damage_id: str, part_type: str = 
     return kb.get_json()
 
 
+def group_submenu_keyboard(
+    request_id: str, part_type: str, damage_type: str, count: int
+) -> str:
+    """Sub-menu shown after tapping a grouped damage (N≥2) in the edit list.
+
+    Offers bulk retype / bulk delete / single delete, plus a back button.
+    The ``count`` is embedded into the button labels so the user sees the
+    blast radius of each action before committing (VK doesn't render
+    confirmation dialogs, so the label IS the confirmation).
+    """
+
+    kb = Keyboard(inline=True)
+    kb.add(
+        Callback(
+            f"Изменить тип всем (×{count})",
+            payload={"cmd": "grp", "a": "retype", "rid": request_id, "pt": part_type, "dt": damage_type},
+        )
+    )
+    kb.row()
+    kb.add(
+        Callback(
+            f"Удалить все (×{count})",
+            payload={"cmd": "grp", "a": "del_all", "rid": request_id, "pt": part_type, "dt": damage_type},
+        ),
+        color=KeyboardButtonColor.NEGATIVE,
+    )
+    kb.row()
+    kb.add(
+        Callback(
+            "Удалить одно",
+            payload={"cmd": "grp", "a": "del_one", "rid": request_id, "pt": part_type, "dt": damage_type},
+        )
+    )
+    kb.row()
+    kb.add(
+        Callback("← К списку повреждений", payload={"cmd": "back_edit", "rid": request_id}),
+        color=KeyboardButtonColor.SECONDARY,
+    )
+    return kb.get_json()
+
+
+def group_retype_keyboard(request_id: str, part_type: str, damage_type_old: str) -> str:
+    """Type-picker for "Изменить тип всем": applies to every damage in group.
+
+    Filters by the part's compatibility set so we never offer "flat_tire"
+    on a door. The currently-set damage type is hidden — picking it would
+    be a no-op and just clutters the list.
+    """
+
+    kb = Keyboard(inline=True)
+    allowed_values = [
+        v for v in _allowed_damage_values_for(part_type) if v != damage_type_old
+    ]
+    # Defensive fallback: if the filter produced an empty list (e.g. the
+    # part has only one compatible damage type and that's the current one)
+    # keep the old value in so the user at least has a visible escape
+    # hatch; tapping it is a no-op but it prevents rendering an empty kb.
+    if not allowed_values:
+        allowed_values = _allowed_damage_values_for(part_type)
+    for i, damage_type in enumerate(allowed_values):
+        label = DAMAGE_LABELS.get(damage_type, damage_type)
+        kb.add(
+            Callback(
+                label,
+                payload={
+                    "cmd": "grp",
+                    "a": "apply_retype",
+                    "rid": request_id,
+                    "pt": part_type,
+                    "dt": damage_type_old,
+                    "nd": damage_type,
+                },
+            )
+        )
+        if i % 2 == 1 and i < len(allowed_values) - 1:
+            kb.row()
+    kb.row()
+    kb.add(
+        Callback("← К списку повреждений", payload={"cmd": "back_edit", "rid": request_id}),
+        color=KeyboardButtonColor.SECONDARY,
+    )
+    return kb.get_json()
+
+
 def add_more_or_confirm_keyboard(request_id: str) -> str:
+    """Keyboard shown after adding a damage in the manual flow.
+
+    ``Подправить`` is wired to the same ``edit/start_edit`` cmd as the ML
+    flow uses, so manual and ML share one edit UX. Before this change,
+    a user who misclicked in manual mode had no way to revise their
+    choice without confirming-then-starting-over.
+    """
+
     kb = Keyboard(inline=True)
     kb.add(Callback("Добавить ещё", payload={"cmd": "addmore", "rid": request_id}))
+    kb.add(
+        Callback("Подправить", payload={"cmd": "edit", "a": "start_edit", "rid": request_id, "did": ""}),
+    )
+    kb.row()
     kb.add(
         Callback("Подтвердить", payload={"cmd": "confirm", "rid": request_id}),
         color=KeyboardButtonColor.POSITIVE,

@@ -12,42 +12,7 @@ from auto_repair_estimator.bot.keyboards.damage_edit import add_more_or_confirm_
 from auto_repair_estimator.bot.keyboards.damage_type_selection import damage_type_selection_keyboard
 from auto_repair_estimator.bot.labels import DAMAGE_LABELS, PART_LABELS
 from auto_repair_estimator.bot.part_selection_send import send_part_selection_messages
-
-
-async def _abandon_any_active_session(backend: BackendClient, chat_id: int) -> None:
-    """Atomically end whatever non-terminal session the chat currently has.
-
-    Mode-switch bug (#3 in the UX round): clicking "Ручной ввод" while an
-    ML session was mid-flight used to spawn a parallel RepairRequest,
-    leaving two non-terminal rows for the same ``chat_id`` and making
-    ``get_latest_active_by_chat_id`` return whichever was newest — so
-    subsequent buttons from the older session started mutating the newer
-    one by accident. Abandoning here collapses the invariant to "at most
-    one active session per chat" at every user-initiated entry point
-    (mode click and "Начать" press).
-    """
-
-    try:
-        active = await backend.get_active_request(chat_id)
-    except Exception as exc:
-        # Probe failure must not stop the user from creating a new request —
-        # worst case we briefly have two actives; the watchdog will clean
-        # the orphan up within 5 minutes.
-        logger.warning(
-            "Could not probe active request for chat_id={} before abandon: {}", chat_id, exc
-        )
-        return
-    if active is None:
-        return
-    try:
-        await backend.abandon_request(str(active.get("id")))
-    except Exception as exc:
-        logger.warning(
-            "abandon_request failed for chat_id={} rid={}: {}",
-            chat_id,
-            active.get("id"),
-            exc,
-        )
+from auto_repair_estimator.bot.session_lifecycle import abandon_active_session
 
 
 async def handle_mode_selection(event: MessageEvent, payload: dict[str, Any], backend: BackendClient, api: API) -> None:
@@ -59,10 +24,13 @@ async def handle_mode_selection(event: MessageEvent, payload: dict[str, Any], ba
         await api.messages.send(peer_id=peer_id, message="Некорректная кнопка. Напишите /start, чтобы начать заново.", random_id=0)
         return
 
-    # Picking a mode IS a session reset — if the user had an older ML or
-    # manual request still active (e.g. clicked an old mode-selection
-    # keyboard), close it before creating the new one.
-    await _abandon_any_active_session(backend, peer_id)
+    # Picking a mode IS a session reset — any non-terminal request the
+    # chat might still have (e.g. an ML request in PROCESSING, a manual
+    # session reached via an old mode-selection keyboard) must be closed
+    # before the new one is created. The notice the user already saw on
+    # the welcome screen of ``handle_start`` / ``handle_start_callback``
+    # covers this case; we don't emit a second one to avoid double-noise.
+    await abandon_active_session(backend, peer_id)
 
     try:
         data = await backend.create_request(chat_id=peer_id, user_id=user_id, mode=mode)
@@ -117,7 +85,9 @@ async def handle_damage_type_selection(
         return
 
     try:
-        await backend.add_damage(request_id=request_id, part_type=part_type, damage_type=damage_type)
+        result = await backend.add_damage(
+            request_id=request_id, part_type=part_type, damage_type=damage_type
+        )
     except Exception as exc:
         logger.error("Failed to add damage: {}", exc)
         await api.messages.send(peer_id=event.peer_id, message="Ошибка при добавлении повреждения.", random_id=0)
@@ -131,9 +101,21 @@ async def handle_damage_type_selection(
     # any previous delete/edit could have changed the set. The cost is
     # negligible compared to the VK send latency that dominates here.
     running_list = await _running_damage_list_or_empty(backend, request_id)
+    # ``already_existed=True`` means the backend short-circuited the add
+    # because the same pair was already active on the request (domain
+    # invariant: one active damage per ``(part, type)``). We switch the
+    # heading from "Добавлено" to a softer "уже есть" so the user knows
+    # the tap was recognised but didn't grow the list — which matches
+    # the state of the basket.
+    already_existed = bool(result.get("already_existed")) if isinstance(result, dict) else False
+    heading = (
+        f"Это повреждение уже есть в списке: {part_label} — {damage_label}"
+        if already_existed
+        else f"Добавлено: {part_label} — {damage_label}"
+    )
     await api.messages.send(
         peer_id=event.peer_id,
-        message=f"Добавлено: {part_label} — {damage_label}\n\n{running_list}",
+        message=f"{heading}\n\n{running_list}",
         keyboard=add_more_or_confirm_keyboard(request_id),
         random_id=0,
     )

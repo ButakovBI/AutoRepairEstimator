@@ -89,7 +89,20 @@ async def handle_confirm(event: MessageEvent, payload: dict[str, Any], backend: 
                 float(item.get("hours_min", 0.0)),
                 float(item.get("hours_max", 0.0)),
             )
-            lines.append(f"  - {part_label} — {damage_label}: {cost} ({hours})")
+            # The treatment suffix tells the user why a price is as high
+            # as it is. "Замена" is visually jarring in a range like
+            # "18 000 руб. за царапину", so we surface it inline for
+            # replacement-class damages only. The backend picks the
+            # treatment via ``causes_replacement`` — see
+            # ``PricingService.calculate``. Anything non-replacement
+            # falls through without a suffix: the price range is
+            # self-explanatory for painting / dent work.
+            treatment_suffix = (
+                " — замена" if item.get("treatment") == "replacement" else ""
+            )
+            lines.append(
+                f"  - {part_label} — {damage_label}{treatment_suffix}: {cost} ({hours})"
+            )
     else:
         # All damages were routed to a tyre shop / had no rule: just show notes.
         lines.append("Кузовной ремонт по этой заявке не требуется.")

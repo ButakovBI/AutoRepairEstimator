@@ -14,6 +14,7 @@ from auto_repair_estimator.bot.handlers.damage_edit import (
     handle_back_edit,
     handle_edit_action,
     handle_edit_damage_type,
+    handle_group_action,
 )
 from auto_repair_estimator.bot.handlers.manual_flow import (
     handle_add_more,
@@ -25,7 +26,6 @@ from auto_repair_estimator.bot.handlers.manual_flow import (
 from auto_repair_estimator.bot.handlers.photo import handle_photo
 from auto_repair_estimator.bot.handlers.pricing import handle_confirm
 from auto_repair_estimator.bot.handlers.start import (
-    PHOTO_DURING_MANUAL_NUDGE,
     active_session_nudge,
     handle_start,
     handle_start_callback,
@@ -51,6 +51,7 @@ CALLBACK_HANDLERS: dict[str, Any] = {
     "dmg": handle_damage_type_selection,
     "edit": handle_edit_action,
     "edtype": handle_edit_damage_type,
+    "grp": handle_group_action,
     "confirm": handle_confirm,
     "addmore": handle_add_more,
     "back_parts": handle_back_parts,
@@ -63,7 +64,7 @@ CALLBACK_HANDLERS: dict[str, Any] = {
 # status is PRICING (ML sessions in CREATED/QUEUED/PROCESSING must
 # finish their analysis first).
 CMDS_REQUIRING_ACTIVE_RID: frozenset[str] = frozenset(
-    {"part", "dmg", "edit", "edtype", "confirm", "addmore", "back_parts", "back_edit"}
+    {"part", "dmg", "edit", "edtype", "grp", "confirm", "addmore", "back_parts", "back_edit"}
 )
 CMDS_REQUIRING_PRICING_STATUS: frozenset[str] = frozenset(
     {"part", "dmg", "addmore", "back_parts"}
@@ -77,40 +78,34 @@ async def handle_incoming_message(
 ) -> None:
     """Top-level dispatcher for free-form user messages (non-callback path).
 
-    Pulled out of the local ``on_message`` closure so unit tests can drive
-    it directly with mock ``BackendClient`` / ``vkbottle.API`` fakes — the
+    Pulled out of the ``on_message`` closure so unit tests can drive it
+    directly with mock ``BackendClient`` / ``vkbottle.API`` fakes — the
     full ``_register_handlers`` wiring requires a real ``Bot`` token and
     is awkward to exercise end-to-end in a unit test. Behaviour:
 
-    * If the message contains photos AND the chat has an active manual
-      session, emit the ``PHOTO_DURING_MANUAL_NUDGE`` copy and do nothing
-      else — creating a parallel ML request would leave two non-terminal
-      rows for the same ``chat_id`` (bug #4).
-    * Otherwise a photo routes to ``handle_photo`` (fresh ML request).
-    * Plain text without photos: ``active_session_nudge(mode, status)``
-      picks the right contextual hint, else the "press Начать" reject.
+    * **Photo branch.** Any photo is forwarded to ``handle_photo``
+      which enforces the single-active-session invariant itself
+      (abandons the prior session, if any, with a visible notice) —
+      the dispatcher intentionally stays out of the decision so the
+      abandonment logic has exactly one home.
+    * **Text branch.** No active session → invite the user to press
+      «Начать». Active session → render the ``(mode, status)``-aware
+      nudge so we never tell the user "use the buttons" when the last
+      message had none.
     """
+
+    photos = message.get_photo_attachments()
+    if photos:
+        await handle_photo(message, backend, api)
+        return
 
     try:
         active = await backend.get_active_request(message.peer_id)
     except Exception as exc:
-        # Expected-but-rare: backend probe failure must never block the
-        # user from sending a photo. Degrade to "no active session" so
-        # we fall through to the plain-photo path.
         logger.warning(
             "Could not probe active request for peer_id={}: {}", message.peer_id, exc
         )
         active = None
-
-    photos = message.get_photo_attachments()
-    if photos:
-        if active is not None and (active.get("mode") or "").lower() == "manual":
-            await message.answer(
-                PHOTO_DURING_MANUAL_NUDGE, keyboard=start_keyboard()
-            )
-            return
-        await handle_photo(message, backend, api)
-        return
 
     if active is None:
         await send_no_active_session_reply(api, message.peer_id)
@@ -175,7 +170,7 @@ async def validate_active_rid_for_callback(
 def _register_handlers(bot: Bot, backend: BackendClient) -> None:
     @bot.on.message(text=["/start", "Начать", "начать"])
     async def on_start(message: Message) -> None:
-        await handle_start(message)
+        await handle_start(message, backend)
 
     @bot.on.message()
     async def on_message(message: Message) -> None:
@@ -186,7 +181,18 @@ def _register_handlers(bot: Bot, backend: BackendClient) -> None:
         payload: dict[str, Any] = event.get_payload_json() or {}
         cmd = payload.get("cmd")
 
-        await event.show_snackbar("...")
+        # Acknowledge the callback silently so VK removes the button's
+        # loading spinner. Previously we called ``show_snackbar("...")``,
+        # which literally displayed the three dots as a toast next to
+        # every press — users reported it as visual noise. An empty
+        # answer dismisses the spinner without any UI side-effect. Wrapped
+        # in try/except because a transient VK hiccup here must not
+        # block the main handler: at worst VK will time out the spinner
+        # on its own after ~10s.
+        try:
+            await event.send_empty_answer()
+        except Exception as exc:
+            logger.warning("send_empty_answer failed for cmd={}: {}", cmd, exc)
 
         handler = CALLBACK_HANDLERS.get(cmd)
         if handler is None:

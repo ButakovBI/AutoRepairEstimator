@@ -1,7 +1,15 @@
 from __future__ import annotations
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+# Moscow time — fixed offset because the operator team and every user
+# of this bot lives in GMT+3. Relying on the host's local timezone
+# (``datetime.astimezone()`` with no argument) would render UTC inside
+# the production container, so a request created at 14:00 MSK showed
+# up in the notification as "11:00" — the user's complaint that led to
+# this change.
+MOSCOW_TZ = timezone(timedelta(hours=3), name="MSK")
 
 from loguru import logger
 from vkbottle import API
@@ -139,18 +147,23 @@ class NotificationConsumer:
     def _format_timeout_message(created_at_iso: Any) -> str:
         """Render the user-facing timeout text, including when the request was created.
 
-        The backend sends ``request_created_at`` as ISO-8601 UTC. We convert
-        to the operator's local wall clock (Moscow == UTC+3 in prod, local
-        machine elsewhere in tests) and format as HH:MM — the user only
-        cares "which of my requests died", not millisecond precision. If the
-        timestamp is missing or malformed we degrade to the timeless variant
-        instead of raising, because a broken side-channel must not swallow
-        the whole notification.
+        The backend sends ``request_created_at`` as ISO-8601 UTC. We always
+        convert to Moscow time (UTC+3) — the previous "local machine"
+        conversion rendered UTC inside the container and confused users
+        who expected MSK. If the timestamp is missing or malformed we
+        degrade to the timeless variant instead of raising, because a
+        broken side-channel must not swallow the whole notification.
+
+        The copy is deliberately framed as a "timeout — session closed"
+        rather than "finished with an error". The user did nothing
+        wrong: either the model took too long or our infrastructure
+        couldn't deliver a result in time, and calling that "an error"
+        shifts blame onto them.
         """
 
         base = (
-            "Обработка вашего запроса завершилась с ошибкой (превышено время ожидания).\n"
-            "Попробуйте ещё раз — нажмите кнопку «Начать»."
+            "Время ожидания обработки вашего запроса истекло — заявка закрыта.\n"
+            "Чтобы попробовать ещё раз, нажмите «Начать»."
         )
         if not isinstance(created_at_iso, str) or not created_at_iso:
             return base
@@ -160,10 +173,10 @@ class NotificationConsumer:
             return base
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        local_dt = dt.astimezone()
-        when = local_dt.strftime("%d.%m %H:%M")
+        moscow_dt = dt.astimezone(MOSCOW_TZ)
+        when = moscow_dt.strftime("%d.%m %H:%M")
         return (
-            f"Обработка вашего запроса от {when} завершилась с ошибкой "
-            "(превышено время ожидания).\n"
-            "Попробуйте ещё раз — нажмите кнопку «Начать»."
+            f"Время ожидания обработки вашего запроса от {when} (МСК) истекло — "
+            "заявка закрыта.\n"
+            "Чтобы попробовать ещё раз, нажмите «Начать»."
         )
