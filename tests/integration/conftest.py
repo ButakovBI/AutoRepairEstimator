@@ -39,6 +39,22 @@ _TRUNCATE_TABLES = [
 ]
 
 
+async def _truncate_all_tables(dsn: str) -> None:
+    """Best-effort cleanup between integration tests.
+
+    Uses a *fresh* connection instead of the test pool so teardown remains
+    stable even if a pooled connection was dropped by Postgres mid-test.
+    """
+    conn: asyncpg.Connection | None = None
+    try:
+        conn = await asyncpg.connect(dsn)
+        for table in _TRUNCATE_TABLES:
+            await conn.execute(f"TRUNCATE {table} CASCADE")
+    finally:
+        if conn is not None:
+            await conn.close()
+
+
 async def _init_schema(dsn: str) -> None:
     pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
     sql = _INIT_SQL_PATH.read_text(encoding="utf-8")
@@ -100,10 +116,12 @@ async def db_pool(postgres_dsn: str) -> asyncpg.Pool:  # type: ignore[return]
     try:
         yield pool
     finally:
-        async with pool.acquire() as conn:
-            for table in _TRUNCATE_TABLES:
-                await conn.execute(f"TRUNCATE {table} CASCADE")
-        await pool.close()
+        # Close test pool first; cleanup then runs through a fresh
+        # standalone connection to avoid teardown flakes when a pooled
+        # connection gets severed by the DB engine.
+        if not pool.is_closed():
+            await pool.close()
+        await _truncate_all_tables(postgres_dsn)
 
 
 @pytest.fixture
