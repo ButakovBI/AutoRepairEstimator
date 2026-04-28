@@ -22,4 +22,4 @@ from vkbottle import Callback, Keyboard, KeyboardButtonColor
 def start_keyboard() -> str:
     kb = Keyboard(inline=True)
     kb.add(Callback("Начать", payload={"cmd": "start"}), color=KeyboardButtonColor.POSITIVE)
-    return kb.get_json()
+    return str(kb.get_json())

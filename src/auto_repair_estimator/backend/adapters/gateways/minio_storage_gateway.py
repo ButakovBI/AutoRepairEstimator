@@ -44,7 +44,7 @@ class MinioStorageGateway:
             response.close()
             response.release_conn()
         logger.debug("Downloaded {} bytes from key={}", len(data), key)
-        return data  # type: ignore[return-value]
+        return data
 
     async def object_exists(self, key: str) -> bool:
         bucket, obj = self._split_key(key)

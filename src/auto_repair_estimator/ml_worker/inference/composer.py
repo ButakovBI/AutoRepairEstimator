@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Sequence
+from typing import Protocol
 
 import numpy as np
+import numpy.typing as npt
 from loguru import logger
 from PIL import Image
 
@@ -22,7 +25,13 @@ DAMAGE_COLORS: dict[str, tuple[int, int, int]] = {
 DEFAULT_COLOR = (255, 0, 255)
 
 
-def compose(original_image: Image.Image, damage_detections: list) -> bytes:  # type: ignore[type-arg]
+class DamageLike(Protocol):
+    damage_type: str
+    mask: object | None
+    crop_box_pixels: tuple[int, int, int, int] | None
+
+
+def compose(original_image: Image.Image, damage_detections: Sequence[DamageLike]) -> bytes:
     """Overlay damage masks onto ``original_image`` with alpha blending.
 
     Why the crop-box indirection matters: the damage detector runs on each
@@ -66,7 +75,11 @@ def compose(original_image: Image.Image, damage_detections: list) -> bytes:  # t
     return buf.getvalue()
 
 
-def _binary_mask_in_image_space(detection, img_w: int, img_h: int) -> np.ndarray | None:  # type: ignore[type-arg, no-untyped-def]
+def _binary_mask_in_image_space(
+    detection: DamageLike,
+    img_w: int,
+    img_h: int,
+) -> npt.NDArray[np.float32] | None:
     """Return a ``(img_h, img_w)`` binary mask aligned to the original image,
     or ``None`` if the detection should be skipped.
 

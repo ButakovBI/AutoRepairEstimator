@@ -23,7 +23,7 @@ def inference_result_keyboard(request_id: str) -> str:
     kb = Keyboard(inline=True)
     kb.add(Callback("Подтвердить", payload={"cmd": "confirm", "rid": request_id}), color=KeyboardButtonColor.POSITIVE)
     kb.add(Callback("Подправить", payload={"cmd": "edit", "a": "start_edit", "rid": request_id, "did": ""}))
-    return kb.get_json()
+    return str(kb.get_json())
 
 
 # VK caps each inline keyboard at 10 buttons and 6 rows. The edit screen
@@ -131,7 +131,7 @@ def damage_edit_keyboards_list(request_id: str, damages: list[dict[str, Any]]) -
                 Callback("Готово", payload={"cmd": "confirm", "rid": request_id}),
                 color=KeyboardButtonColor.POSITIVE,
             )
-        keyboards.append(kb.get_json())
+        keyboards.append(str(kb.get_json()))
     return keyboards
 
 
@@ -179,7 +179,7 @@ def edit_damage_type_keyboard(request_id: str, damage_id: str, part_type: str = 
         Callback("← К списку повреждений", payload={"cmd": "back_edit", "rid": request_id}),
         color=KeyboardButtonColor.SECONDARY,
     )
-    return kb.get_json()
+    return str(kb.get_json())
 
 
 def group_submenu_keyboard(request_id: str, part_type: str, damage_type: str, count: int) -> str:
@@ -218,7 +218,7 @@ def group_submenu_keyboard(request_id: str, part_type: str, damage_type: str, co
         Callback("← К списку повреждений", payload={"cmd": "back_edit", "rid": request_id}),
         color=KeyboardButtonColor.SECONDARY,
     )
-    return kb.get_json()
+    return str(kb.get_json())
 
 
 def group_retype_keyboard(request_id: str, part_type: str, damage_type_old: str) -> str:
@@ -259,7 +259,7 @@ def group_retype_keyboard(request_id: str, part_type: str, damage_type_old: str)
         Callback("← К списку повреждений", payload={"cmd": "back_edit", "rid": request_id}),
         color=KeyboardButtonColor.SECONDARY,
     )
-    return kb.get_json()
+    return str(kb.get_json())
 
 
 def add_more_or_confirm_keyboard(request_id: str) -> str:
@@ -281,4 +281,4 @@ def add_more_or_confirm_keyboard(request_id: str) -> str:
         Callback("Подтвердить", payload={"cmd": "confirm", "rid": request_id}),
         color=KeyboardButtonColor.POSITIVE,
     )
-    return kb.get_json()
+    return str(kb.get_json())

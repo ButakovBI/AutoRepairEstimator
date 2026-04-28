@@ -78,11 +78,11 @@ def _outbox_repo(request: Request) -> OutboxRepository:
 
 
 def _raw_bucket(request: Request) -> str:
-    return getattr(request.app.state, "s3_bucket_raw", "raw-images")  # type: ignore[no-any-return]
+    return str(getattr(request.app.state, "s3_bucket_raw", "raw-images"))
 
 
 def _inference_requests_topic(request: Request) -> str:
-    return getattr(request.app.state, "kafka_topic_inference_requests", "inference_requests")  # type: ignore[no-any-return]
+    return str(getattr(request.app.state, "kafka_topic_inference_requests", "inference_requests"))
 
 
 def _sm(request: Request) -> RequestStateMachine:

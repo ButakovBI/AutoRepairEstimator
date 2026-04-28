@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import cast
 
 import asyncpg
 from loguru import logger
@@ -139,6 +140,6 @@ def _row_get(row: asyncpg.Record, key: str) -> str | None:
     while the ALTER TABLE is still rolling out.
     """
     try:
-        return row[key]
+        return cast(str | None, row[key])
     except (KeyError, IndexError):
         return None

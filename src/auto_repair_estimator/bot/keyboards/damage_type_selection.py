@@ -66,4 +66,4 @@ def damage_type_selection_keyboard(request_id: str, part_type: str) -> str:
         Callback("← К выбору детали", payload={"cmd": "back_parts", "rid": request_id}),
         color=KeyboardButtonColor.SECONDARY,
     )
-    return kb.get_json()
+    return str(kb.get_json())

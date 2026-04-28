@@ -12,12 +12,12 @@ from auto_repair_estimator.backend.domain.value_objects.request_enums import Dam
 from auto_repair_estimator.ml_worker.config import get_config
 from auto_repair_estimator.ml_worker.inference.composer import DAMAGE_COLORS, DEFAULT_COLOR, compose
 from auto_repair_estimator.ml_worker.inference.cropper import crop_parts
-from auto_repair_estimator.ml_worker.inference.damage_detector import DamageDetector
+from auto_repair_estimator.ml_worker.inference.damage_detector import DamageDetection, DamageDetector
 from auto_repair_estimator.ml_worker.inference.mask_artifacts import (
     mask_overlay_png_bytes,
     mask_to_grayscale_png_bytes,
 )
-from auto_repair_estimator.ml_worker.inference.parts_detector import PartsDetector
+from auto_repair_estimator.ml_worker.inference.parts_detector import PartDetection, PartsDetector
 from auto_repair_estimator.ml_worker.inference.preprocessor import preprocess
 from auto_repair_estimator.ml_worker.inference.result_publisher import ResultPublisher
 from auto_repair_estimator.ml_worker.s3_client import S3Client
@@ -34,7 +34,7 @@ _DAMAGE_OVERLAY_ALPHA = 0.5
 async def _save_part_mask_artifacts(
     s3: S3Client,
     original_image: Any,
-    part_detections: list,  # list[PartDetection]; `Any` kept to avoid import cycle noise
+    part_detections: list[PartDetection],
     request_id: str,
     bucket: str,
 ) -> None:
@@ -79,7 +79,7 @@ async def _save_part_mask_artifacts(
 async def _save_damage_mask_artifacts(
     s3: S3Client,
     crop_bytes: bytes,
-    detections: list,  # list[DamageDetection]
+    detections: list[DamageDetection],
     crop_index: int,
     request_id: str,
     bucket: str,
@@ -172,7 +172,7 @@ async def process_request(
                 bucket=config.s3_bucket_crops,
             )
 
-        all_damages = []
+        all_damages: list[DamageDetection] = []
         for i, crop in enumerate(crops):
             detections = damage_detector.predict(
                 crop.crop_bytes,

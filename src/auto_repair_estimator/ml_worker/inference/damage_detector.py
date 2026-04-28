@@ -82,7 +82,7 @@ class DamageDetector:
         self._model: Any | None = None
 
     def load(self) -> None:
-        from ultralytics import YOLO  # type: ignore[import-untyped]
+        from ultralytics import YOLO  # type: ignore[attr-defined]
 
         self._model = YOLO(self._model_path)
         self._assert_model_classes_match_enum()

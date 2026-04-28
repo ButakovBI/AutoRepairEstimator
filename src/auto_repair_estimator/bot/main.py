@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 from vkbottle import GroupEventType
@@ -166,18 +166,18 @@ async def validate_active_rid_for_callback(
 
 
 def _register_handlers(bot: Bot, backend: BackendClient) -> None:
-    @bot.on.message(text=["/start", "Начать", "начать"])
+    @bot.on.message(text=["/start", "Начать", "начать"])  # type: ignore[untyped-decorator]
     async def on_start(message: Message) -> None:
         await handle_start(message, backend)
 
-    @bot.on.message()
+    @bot.on.message()  # type: ignore[untyped-decorator]
     async def on_message(message: Message) -> None:
         await handle_incoming_message(backend, bot.api, message)
 
-    @bot.on.raw_event(GroupEventType.MESSAGE_EVENT, dataclass=MessageEvent)
+    @bot.on.raw_event(GroupEventType.MESSAGE_EVENT, dataclass=MessageEvent)  # type: ignore[untyped-decorator]
     async def on_callback(event: MessageEvent) -> None:
         payload: dict[str, Any] = event.get_payload_json() or {}
-        cmd = payload.get("cmd")
+        cmd = cast(str, payload.get("cmd"))
 
         # Acknowledge the callback silently so VK removes the button's
         # loading spinner. Previously we called ``show_snackbar("...")``,

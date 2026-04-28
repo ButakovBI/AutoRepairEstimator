@@ -4,6 +4,7 @@ import io
 from dataclasses import dataclass
 
 import numpy as np
+import numpy.typing as npt
 from loguru import logger
 from PIL import Image
 
@@ -14,7 +15,7 @@ INPUT_SIZE = 640
 @dataclass
 class PreprocessResult:
     original_image: Image.Image
-    tensor: np.ndarray  # type: ignore[type-arg]
+    tensor: npt.NDArray[np.float32]
     original_size: tuple[int, int]
 
 

@@ -21,7 +21,7 @@ class S3Client:
             response.close()
             response.release_conn()
         logger.debug("Downloaded {} bytes from key={}", len(data), key)
-        return data  # type: ignore[return-value]
+        return data
 
     async def upload_image(self, key: str, data: bytes, content_type: str = "image/jpeg") -> None:
         bucket, obj = self._split_key(key)

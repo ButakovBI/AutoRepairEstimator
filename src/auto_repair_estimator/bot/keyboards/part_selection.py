@@ -15,7 +15,7 @@ def _keyboard_for_part_items(request_id: str, items: list[tuple[str, str]]) -> s
         kb.add(Callback(label, payload={"cmd": "part", "rid": request_id, "pt": part_type}))
         if (i + 1) % VK_INLINE_DEFAULT_BUTTONS_PER_ROW == 0 and i < len(items) - 1:
             kb.row()
-    return kb.get_json()
+    return str(kb.get_json())
 
 
 def part_selection_keyboards_list(request_id: str) -> list[str]:
