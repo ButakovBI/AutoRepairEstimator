@@ -119,8 +119,12 @@ async def db_pool(postgres_dsn: str) -> asyncpg.Pool:  # type: ignore[return]
         # Close test pool first; cleanup then runs through a fresh
         # standalone connection to avoid teardown flakes when a pooled
         # connection gets severed by the DB engine.
-        if not pool.is_closed():
+        try:
             await pool.close()
+        except Exception:
+            # If the pool is already broken/closed, cleanup still proceeds
+            # through a fresh standalone connection below.
+            pass
         await _truncate_all_tables(postgres_dsn)
 
 

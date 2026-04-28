@@ -66,8 +66,8 @@ DAMAGES_CONFIDENCE_BY_CLASS: Final[Mapping[DamageType, float]] = {
     DamageType.PAINT_CHIP: 0.30,
     DamageType.RUST: 0.30,
     DamageType.CRACK: 0.25,
-    DamageType.BROKEN_GLASS: 0.50,
-    DamageType.FLAT_TIRE: 0.60,
+    DamageType.BROKEN_GLASS: 0.40,
+    DamageType.FLAT_TIRE: 0.50,
     DamageType.BROKEN_HEADLIGHT: 0.40,
 }
 
