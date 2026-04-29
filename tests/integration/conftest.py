@@ -142,7 +142,7 @@ def postgres_dsn() -> str:  # type: ignore[return]
 
 
 @pytest.fixture
-async def db_pool(postgres_dsn: str) -> asyncpg.Pool:  # type: ignore[return]
+async def db_pool(postgres_dsn: str, anyio_backend: str) -> asyncpg.Pool:  # type: ignore[return]
     """Function-scoped pool backed by a database isolated to one test."""
 
     db_name, test_dsn = await _create_test_database(postgres_dsn)
@@ -159,7 +159,7 @@ async def db_pool(postgres_dsn: str) -> asyncpg.Pool:  # type: ignore[return]
 
 
 @pytest.fixture
-async def api_client(db_pool: asyncpg.Pool) -> AsyncClient:  # type: ignore[return]
+async def api_client(db_pool: asyncpg.Pool, anyio_backend: str) -> AsyncClient:  # type: ignore[return]
     """FastAPI test client backed by real PostgreSQL repositories.
 
     This is the primary fixture for controller+database integration tests.
