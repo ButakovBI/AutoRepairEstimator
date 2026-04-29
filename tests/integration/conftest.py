@@ -23,6 +23,8 @@ import asyncio
 import os
 import pathlib
 import re
+import uuid
+from urllib.parse import ParseResult, urlparse, urlunparse
 
 import asyncpg
 import pytest
@@ -30,29 +32,61 @@ from httpx import ASGITransport, AsyncClient
 
 _INIT_SQL_PATH = pathlib.Path(__file__).parents[2] / "docker" / "init.sql"
 
-# Tables cleared before each test (order matters due to FK constraints).
-_TRUNCATE_TABLES = [
-    "detected_damages",
-    "detected_parts",
-    "outbox_events",
-    "repair_requests",
-]
+def _replace_database(dsn: str, database: str) -> str:
+    parsed = urlparse(dsn)
+    return urlunparse(
+        ParseResult(
+            scheme=parsed.scheme,
+            netloc=parsed.netloc,
+            path=f"/{database}",
+            params=parsed.params,
+            query=parsed.query,
+            fragment=parsed.fragment,
+        )
+    )
 
 
-async def _truncate_all_tables(dsn: str) -> None:
-    """Best-effort cleanup between integration tests.
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
 
-    Uses a *fresh* connection instead of the test pool so teardown remains
-    stable even if a pooled connection was dropped by Postgres mid-test.
-    """
-    conn: asyncpg.Connection | None = None
+
+async def _create_test_database(base_dsn: str) -> tuple[str, str]:
+    """Create an isolated database for one integration test."""
+
+    db_name = f"are_test_{uuid.uuid4().hex}"
+    admin_dsn = _replace_database(base_dsn, "postgres")
+    conn = await asyncpg.connect(admin_dsn)
     try:
-        conn = await asyncpg.connect(dsn)
-        for table in _TRUNCATE_TABLES:
-            await conn.execute(f"TRUNCATE {table} CASCADE")
+        await conn.execute(f"CREATE DATABASE {_quote_identifier(db_name)}")
     finally:
-        if conn is not None:
-            await conn.close()
+        await conn.close()
+
+    test_dsn = _replace_database(base_dsn, db_name)
+    await _init_schema(test_dsn)
+    return db_name, test_dsn
+
+
+async def _drop_test_database(base_dsn: str, db_name: str) -> None:
+    """Drop the isolated test database and terminate stray connections."""
+
+    admin_dsn = _replace_database(base_dsn, "postgres")
+    conn = await asyncpg.connect(admin_dsn)
+    quoted = _quote_identifier(db_name)
+    try:
+        await conn.execute(
+            """
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE datname = $1 AND pid <> pg_backend_pid()
+            """,
+            db_name,
+        )
+        try:
+            await conn.execute(f"DROP DATABASE IF EXISTS {quoted} WITH (FORCE)")
+        except asyncpg.PostgresSyntaxError:
+            await conn.execute(f"DROP DATABASE IF EXISTS {quoted}")
+    finally:
+        await conn.close()
 
 
 async def _init_schema(dsn: str) -> None:
@@ -72,7 +106,6 @@ def _try_testcontainers() -> str | None:
         container.start()
         raw = container.get_connection_url()
         dsn = re.sub(r"^postgresql\+\w+://", "postgresql://", raw)
-        asyncio.run(_init_schema(dsn))
         # Store the container on the fixture so it's stopped on teardown.
         _try_testcontainers._container = container  # type: ignore[attr-defined]
         return dsn
@@ -92,7 +125,6 @@ def postgres_dsn() -> str:  # type: ignore[return]
     # Strategy 1 — explicit env var (e.g. docker-compose postgres)
     env_dsn = os.getenv("INTEGRATION_DB_URL")
     if env_dsn:
-        asyncio.run(_init_schema(env_dsn))
         yield env_dsn
         return
 
@@ -111,21 +143,19 @@ def postgres_dsn() -> str:  # type: ignore[return]
 
 @pytest.fixture
 async def db_pool(postgres_dsn: str) -> asyncpg.Pool:  # type: ignore[return]
-    """Function-scoped pool; truncates all tables after each test."""
-    pool: asyncpg.Pool = await asyncpg.create_pool(postgres_dsn, min_size=1, max_size=3)
+    """Function-scoped pool backed by a database isolated to one test."""
+
+    db_name, test_dsn = await _create_test_database(postgres_dsn)
+    pool: asyncpg.Pool = await asyncpg.create_pool(test_dsn, min_size=1, max_size=3)
     try:
         yield pool
     finally:
-        # Close test pool first; cleanup then runs through a fresh
-        # standalone connection to avoid teardown flakes when a pooled
-        # connection gets severed by the DB engine.
-        try:
-            await pool.close()
-        except Exception:
-            # If the pool is already broken/closed, cleanup still proceeds
-            # through a fresh standalone connection below.
-            pass
-        await _truncate_all_tables(postgres_dsn)
+        # Immediate termination is deliberate here: after the test body
+        # finishes, no code should still use this function-scoped pool.
+        # Terminating avoids asyncpg close/teardown races and the database
+        # itself is dropped below, so no state can leak into another test.
+        pool.terminate()
+        await _drop_test_database(postgres_dsn, db_name)
 
 
 @pytest.fixture
