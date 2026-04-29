@@ -1,0 +1,64 @@
+{
+  "config": {
+    "backend_url": "http://backend:8000",
+    "target_rps": 50,
+    "duration_seconds": 60,
+    "workers": 64,
+    "image_side_px": 640
+  },
+  "totals": {
+    "attempted": 2403,
+    "succeeded": 2403,
+    "success_rate": 1.0,
+    "wall_seconds": 64.87,
+    "observed_rps": 37.04
+  },
+  "latency_ms": {
+    "full_cycle": {
+      "count": 2403,
+      "p50_ms": 1581.39,
+      "p95_ms": 2124.89,
+      "p99_ms": 4226.91,
+      "max_ms": 4898.25,
+      "mean_ms": 1654.31
+    },
+    "create_request": {
+      "count": 2403,
+      "p50_ms": 510.91,
+      "p95_ms": 668.89,
+      "p99_ms": 1273.5,
+      "max_ms": 1964.62,
+      "mean_ms": 531.14
+    },
+    "s3_upload": {
+      "count": 2403,
+      "p50_ms": 514.56,
+      "p95_ms": 752.34,
+      "p99_ms": 2161.49,
+      "max_ms": 2373.04,
+      "mean_ms": 542.44
+    },
+    "confirm_upload": {
+      "count": 2403,
+      "p50_ms": 556.06,
+      "p95_ms": 804.54,
+      "p99_ms": 1026.87,
+      "max_ms": 1369.83,
+      "mean_ms": 580.68
+    }
+  },
+  "errors": {},
+  "kafka": {
+    "topics": {
+      "inference_requests": {
+        "partition_count": 1
+      },
+      "inference_results": {
+        "partition_count": 1
+      },
+      "notifications": {
+        "partition_count": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+path: ../datasets/parts
+train: images/train
+val: images/val
+test: images/test
+
+nc: 12
+names:
+  - door
+  - front_fender
+  - rear_fender
+  - trunk
+  - hood
+  - roof
+  - headlight
+  - front_windshield
+  - rear_windshield
+  - side_window
+  - wheel
+  - bumper

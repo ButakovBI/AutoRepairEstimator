@@ -1,0 +1,156 @@
+services:
+  # If you see FATAL: role "auto_repair" does not exist, an old volume was created with other credentials.
+  # Reset: docker compose -f docker/docker-compose.yml down -v
+  postgres:
+    image: postgres:16-alpine
+    container_name: auto-repair-postgres
+    environment:
+      POSTGRES_DB: auto_repair
+      POSTGRES_USER: auto_repair
+      POSTGRES_PASSWORD: auto_repair
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_auto_repair_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auto_repair"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  minio:
+    image: minio/minio:RELEASE.2024-01-18T22-51-28Z
+    container_name: auto-repair-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    # ubi-micro: no curl; use mc. If you change MINIO_ROOT_USER/PASSWORD above, update the two literals in this healthcheck too.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mc alias set hc http://127.0.0.1:9000 minioadmin minioadmin && mc ready hc",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: auto-repair-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: auto-repair-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Two advertised listeners require explicit KAFKA_LISTENERS; otherwise the broker often exits(1).
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 40s
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: auto-repair-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    env_file: ../.env
+    environment:
+      DB_HOST: postgres
+      S3_ENDPOINT: http://minio:9000
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    ports:
+      - "8000:8000"
+    # python:slim has no curl; use stdlib HTTP client
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 8s
+      retries: 6
+      start_period: 30s
+
+  bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.bot
+    container_name: auto-repair-bot
+    depends_on:
+      backend:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    env_file: ../.env
+    environment:
+      BACKEND_URL: http://backend:8000
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      S3_ENDPOINT: http://minio:9000
+
+  ml_worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ml_worker
+    container_name: auto-repair-ml-worker
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file: ../.env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      S3_ENDPOINT: http://minio:9000
+      # Confidence thresholds intentionally NOT pinned here.
+      # The single source of truth is
+      # src/auto_repair_estimator/backend/domain/value_objects/ml_thresholds.py;
+      # overriding them in two places silently de-syncs the ML worker
+      # from the rest of the business logic. Use PARTS_CONFIDENCE_THRESHOLD
+      # / DAMAGES_CONFIDENCE_THRESHOLD env vars only for one-off ops
+      # experiments, and revert by removing the env var — not by editing
+      # the value.
+    volumes:
+      - ./models:/app/models:ro
+
+volumes:
+  postgres_auto_repair_data:
+  minio_data:

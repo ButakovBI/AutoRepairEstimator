@@ -1,229 +1,130 @@
-## Распределенная система видео аналитики
+# Auto Repair Estimator
 
-## api
-- **POST /scenario/** - инициализация стейт-машины
-- **POST /scenario/<scenario_id>/** - изменение статуса стейт-машины
-- **GET /scenario/<scenario_id>/** - информация о текущем статусе сценария
-- **GET /prediction/<scenario_id>/** - результаты предсказаний
+A VK bot for estimating car repair costs using computer vision (YOLOv8-seg) or manual damage selection.
 
-## orchestrator
-- **чтение события (команды)** - получение запроса от api
-- **контроль состояния** - сохранение \ изменение \ передача в api (transactional outbox)
-- **выполнение действия** - управление runner (сущностями сценариев внутри него)
+## Features
 
-Поддержка следующих статусов:
-- **init_startup** - инициализация запуска
-- **in_startup_processing** - промежуточное состояние, олицетворяющее процесс запуска
-- **active** - активное состояние \ работа сценария
-- **init_shutdown** - инициализация остановки
-- **in_shutdown_processing** - промежуточное состояние, олицетворяющее процесс остановки
-- **inactive** - выключенное состояние
+- **ML Mode**: Upload a photo of the damaged car — the system automatically detects parts and damage using two YOLOv8-seg models, overlays segmentation masks, and returns repair cost and time estimates.
+- **Manual Mode**: Select damaged parts and damage types via inline keyboards — get instant pricing without photo analysis.
+- **Damage Editing**: After ML inference, users can confirm, edit, or add/delete detected damages before pricing.
+- **Reliable Async Pipeline**: Kafka-based message queue with transactional outbox pattern ensures at-least-once delivery.
+- **Heartbeat Watchdog**: Automatically marks timed-out requests as failed and notifies users.
 
-Жизненный цикл контролируется посредством конечного автомата со следующими переходами:
-- init_startup → in_startup_processing → active
-- init_shutdown → in_shutdown_processing → inactive
+## Architecture
 
-Поддержка:
-- **отказоустойчивости** - перезапуск сценария в случае, если тот прекратил свою работу (отсутствие "сердцебиения")
-- **масштабирования** - множество runner без дубликатов заданий (сценарий запускается однократно без дополнительных экземпляров только в своем runner)
+The system follows Clean Architecture with 3 services:
 
-## runner
-- **чтение кадра** - живой поток (rtsp \ onvif \ ...) и\или заготовленное локальное видео
-- **препроцессинг (optional)** - подготовка полученного кадра к отправке (BGR2RGB \ resize \ ...)
-- **отправка кадра** - отправка кадра в inference
-- **получение результата** - чтение результатов с предсказаниями
-- **публикация результата** - доступность событий (предсказаний) на стороне api
+| Service | Technology | Port |
+|---------|-----------|------|
+| Backend API | FastAPI + asyncpg | 8000 |
+| Bot | vkbottle 4.x | — |
+| ML Worker | YOLOv8-seg + Kafka | — |
 
-## inference
-- **чтение кадра** - получение кадра
-- **предсказание** - inference при помощи модели (mock при отсутствии возможности запуска модели)
-- **отправка результатов** - возврат результатов в runner
+**Infrastructure**: PostgreSQL 16, Apache Kafka, MinIO S3.
 
+> **Why no Nginx?** The bot uses the VK Long Poll API (`vkbottle.run_polling`):
+> it initiates outbound HTTPS connections to VK and does not need to expose an
+> HTTP endpoint to receive webhooks, so a reverse proxy in front of the bot is
+> unnecessary. The backend is reached directly by internal services over the
+> Docker network.
 
-### Структура проекта:
-<pre>
-MisisVideoAnalytics/
-├── README.md
-├── build
-│   ├── docker
-│   │   ├── api_service
-│   │   │   ├── Dockerfile
-│   │   │   └── test.Dockerfile
-│   │   ├── docker_compose.yml
-│   │   ├── images_configuration.json
-│   │   ├── inference_service
-│   │   │   ├── Dockerfile
-│   │   │   └── test.Dockerfile
-│   │   ├── orchestrator_service
-│   │   │   ├── Dockerfile
-│   │   │   └── test.Dockerfile
-│   │   └── runner_service
-│   │       ├── Dockerfile
-│   │       └── test.Dockerfile
-│   ├── misis_bootstrap
-│   │   ├── pyproject.toml
-│   │   ├── setup.py
-│   │   ├── source
-│   │   │   └── misis_bootstrap
-│   │   │       ├── __init__.py
-│   │   │       ├── bootstrap.py
-│   │   │       ├── main.py
-│   │   │       └── package_manager.py
-│   │   └── versions.json
-│   └── misis_builder
-│       ├── pyproject.toml
-│       ├── setup.py
-│       └── source
-│           └── misis_builder
-│               ├── __init__.py
-│               ├── build_runner.py
-│               └── main.py
-├── run.sh
-└── source
-    ├── api_service
-    │   └── misis_scenario_api
-    │       ├── pyproject.toml
-    │       ├── setup.py
-    │       ├── source
-    │       │   └── misis_scenario_api
-    │       │       ├── __init__.py
-    │       │       ├── app
-    │       │       │   ├── __init__.py
-    │       │       │   ├── config.py
-    │       │       │   └── web
-    │       │       │       ├── __init__.py
-    │       │       │       ├── app.py
-    │       │       │       ├── routers.py
-    │       │       │       └── scenario_service.py
-    │       │       ├── database
-    │       │       │   ├── __init__.py
-    │       │       │   ├── base.py
-    │       │       │   ├── database.py
-    │       │       │   └── tables
-    │       │       │       ├── __init__.py
-    │       │       │       ├── outbox.py
-    │       │       │       └── scenario.py
-    │       │       ├── kafka
-    │       │       │   ├── __init__.py
-    │       │       │   └── producer.py
-    │       │       ├── models
-    │       │       │   ├── __init__.py
-    │       │       │   ├── bounding_box.py
-    │       │       │   ├── constants
-    │       │       │   │   ├── __init__.py
-    │       │       │   │   ├── command_type.py
-    │       │       │   │   ├── kafka_topic.py
-    │       │       │   │   └── scenario_status.py
-    │       │       │   ├── prediction_response.py
-    │       │       │   ├── scenario_create_request.py
-    │       │       │   └── scenario_status_response.py
-    │       │       ├── outbox
-    │       │       │   ├── __init__.py
-    │       │       │   └── outbox_worker.py
-    │       │       └── s3
-    │       │           ├── __init__.py
-    │       │           └── s3_client.py
-    │       └── tests
-    │           ├── __pycache__
-    │           ├── conftest.py
-    │           └── unit
-    │               └── base.py
-    ├── inference_service
-    │   └── misis_inference
-    │       ├── pyproject.toml
-    │       ├── setup.py
-    │       └── source
-    │           └── misis_inference
-    │               ├── __init__.py
-    │               ├── app
-    │               │   ├── __init__.py
-    │               │   └── web
-    │               │       ├── __init__.py
-    │               │       ├── app.py
-    │               │       ├── prediction_service.py
-    │               │       └── routers.py
-    │               └── models
-    │                   ├── __init__.py
-    │                   ├── bounding_box.py
-    │                   └── prediction_response.py
-    ├── orchestrator_service
-    │   └── misis_orchestrator
-    │       ├── pyproject.toml
-    │       ├── setup.py
-    │       └── source
-    │           └── misis_orchestrator
-    │               ├── __init__.py
-    │               ├── app
-    │               │   ├── __init__.py
-    │               │   └── config.py
-    │               ├── database
-    │               │   ├── __init__.py
-    │               │   ├── base.py
-    │               │   ├── database.py
-    │               │   └── tables
-    │               │       ├── __init__.py
-    │               │       ├── heartbeat.py
-    │               │       ├── outbox.py
-    │               │       └── scenario.py
-    │               ├── health
-    │               │   ├── __init__.py
-    │               │   └── watchdog.py
-    │               ├── kafka
-    │               │   ├── __init__.py
-    │               │   ├── consumer.py
-    │               │   └── producer.py
-    │               ├── main.py
-    │               ├── models
-    │               │   ├── __init__.py
-    │               │   ├── constants
-    │               │   │   ├── __init__.py
-    │               │   │   ├── command_type.py
-    │               │   │   ├── kafka_topic.py
-    │               │   │   └── scenario_status.py
-    │               │   ├── heartbeat.py
-    │               │   └── scenario_command.py
-    │               ├── orchestrator_service.py
-    │               ├── outbox
-    │               │   ├── __init__.py
-    │               │   └── outbox_worker.py
-    │               └── scenario_db_manager.py
-    └── runner_service
-        └── misis_runner
-            ├── pyproject.toml
-            ├── setup.py
-            └── source
-                └── misis_runner
-                    ├── __init__.py
-                    ├── app
-                    │   ├── __init__.py
-                    │   ├── config.py
-                    │   ├── heartbeat_sender.py
-                    │   └── video_processor.py
-                    ├── inference_client.py
-                    ├── kafka
-                    │   ├── __init__.py
-                    │   ├── consumer.py
-                    │   └── producer.py
-                    ├── main.py
-                    ├── models
-                    │   ├── __init__.py
-                    │   ├── bounding_box.py
-                    │   └── constants
-                    │       ├── __init__.py
-                    │       ├── kafka_topic.py
-                    │       └── scenario_status.py
-                    ├── runner.py
-                    └── s3
-                        ├── __init__.py
-                        └── s3_client.py
-</pre>
+See the `.cursor/plans/` directory for detailed C4 diagrams and implementation plan.
 
+## Quick Start
 
-- Перед запуском добавить в окружение или выполнить:
-export REPO_ROOT=/path_to/MisisVideoAnalytics
+### Prerequisites
+- Docker & Docker Compose
+- `.env` file (copy from `.env.example`)
 
-- Запуск тестов:
-./run.sh --test
+```bash
+cp .env.example .env
+# Edit .env — set VK_GROUP_TOKEN (and VK_GROUP_ID if you use it)
+docker compose -f docker/docker-compose.yml up -d
+```
 
-- локальное развёртывание:
-./run.sh
+The backend API will be available at `http://localhost:8000`.
+
+### Development
+
+```bash
+pip install -e ".[dev]"
+pytest tests/
+```
+
+## Project Structure
+
+```
+src/auto_repair_estimator/
+  backend/          # FastAPI + domain + use cases + adapters
+  bot/              # vkbottle bot + handlers + keyboards
+  ml_worker/        # YOLOv8-seg inference pipeline
+ml/                 # Training scripts
+docker/             # Dockerfiles + docker-compose + init.sql
+tests/              # Unit + integration tests
+```
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/requests` | Create repair request (ML or manual mode) |
+| GET | `/v1/requests/{id}` | Get request with detected damages |
+| POST | `/v1/requests/{id}/photo` | Confirm photo upload (transitions CREATED→QUEUED) |
+| POST | `/v1/requests/{id}/damages` | Add damage manually |
+| PATCH | `/v1/requests/{id}/damages/{damage_id}` | Edit damage type |
+| DELETE | `/v1/requests/{id}/damages/{damage_id}` | Soft-delete damage |
+| POST | `/v1/requests/{id}/confirm` | Calculate pricing and confirm (→DONE) |
+| GET | `/health` | Health check |
+
+## Request Lifecycle
+
+```
+CREATED → QUEUED → PROCESSING → PRICING → DONE
+    ↓         ↓          ↓          ↓
+   FAILED   FAILED     FAILED     FAILED  (heartbeat timeout)
+```
+
+Manual mode starts directly in PRICING state.
+
+## ML Pipeline
+
+1. **Parts Detection** (`yolov8m-seg`): 12 car parts (door, front/rear fender, trunk, hood, roof, headlight, front/rear windshield, side window, wheel, bumper). Confidence cutoff is defined once in `backend/domain/value_objects/ml_thresholds.py` (currently 0.5) — see that module for the rationale; ops can override at runtime via `PARTS_CONFIDENCE_THRESHOLD`.
+2. **Cropping**: crops every detected part; excluded parts are configurable via `MLWorkerConfig.crop_excluded_parts`.
+3. **Damage Detection** (`yolov8m-seg`): 8 damage types per crop (scratch, dent, paint_chip, rust, crack, broken_glass, flat_tire, broken_headlight). **Per-class confidence cutoffs** live in `ml_thresholds.py` (`DAMAGES_CONFIDENCE_BY_CLASS`) — edit that single file to retune any class. Current calibration: scratch & flat_tire 0.50, broken_glass & broken_headlight 0.40, rust & paint_chip 0.30, dent & crack 0.25. The env knob `DAMAGES_CONFIDENCE_THRESHOLD` still works as a **uniform** runtime override across all classes (panic knob for ops experiments).
+4. **Composition**: alpha-blend masks onto original image.
+5. **Result**: publish to Kafka `inference_results` topic.
+
+### Training Models
+
+See `scripts/ml/README.md` and `scripts/ml/colab_train.ipynb`. After training,
+copy weights into the volume the worker mounts (`docker/models/`):
+
+```powershell
+Copy-Item -Force test\best_details_2104_1133.pt docker\models\parts.pt
+Copy-Item -Force test\best_damages_21041256.pt docker\models\damages.pt
+docker compose -f docker/docker-compose.yml restart ml_worker
+```
+
+(Adjust source paths when you train new checkpoints; names **`parts.pt`** and **`damages.pt`** are fixed in `MLWorkerConfig`.)
+
+## Testing
+
+```bash
+# All tests with coverage
+pytest tests/ --cov=auto_repair_estimator --cov-fail-under=70
+
+# Lint
+ruff check src/ tests/
+ruff format --check src/ tests/
+
+# Type check
+mypy src/
+```
+
+## CI/CD
+
+GitHub Actions runs on every push/PR:
+1. `ruff check` — linting
+2. `ruff format --check` — formatting
+3. `mypy` — type checking
+4. `pytest --cov-fail-under=70` — tests with coverage gate
