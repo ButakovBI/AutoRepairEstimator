@@ -99,7 +99,7 @@ skip_empty = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-asyncio_mode = "strict"
+asyncio_mode = "auto"
 addopts = [
   "-v",
   "--strict-markers",
