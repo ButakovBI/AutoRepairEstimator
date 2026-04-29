@@ -100,12 +100,20 @@ skip_empty = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+# We deliberately disable the ``anyio`` pytest plugin so that ``pytest-asyncio``
+# is the single source of truth for the event loop. Historically the suite used
+# ``@pytest.mark.anyio`` while ``asyncio_mode = "auto"`` quietly added an
+# ``asyncio`` marker on top, leaving asyncpg pools created in one loop and
+# consumed in another (``attached to a different loop`` / ``ConnectionDoesNotExistError``).
+# The ``anyio`` marker stays registered below as a harmless no-op so existing
+# test files do not need to be touched.
 addopts = [
   "-v",
   "--strict-markers",
+  "-p", "no:anyio",
 ]
 markers = [
-  "anyio: mark test as an anyio async test",
+  "anyio: legacy no-op marker (anyio plugin is disabled; pytest-asyncio handles all async tests)",
   "integration: tests that require external infrastructure (Docker / Postgres container)",
 ]
 
