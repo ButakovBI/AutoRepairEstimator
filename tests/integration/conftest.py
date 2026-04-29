@@ -19,7 +19,6 @@ and returns an ``httpx.AsyncClient`` for HTTP-level assertions.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import pathlib
 import re
@@ -90,11 +89,19 @@ async def _drop_test_database(base_dsn: str, db_name: str) -> None:
 
 
 async def _init_schema(dsn: str) -> None:
-    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+    """Apply the canonical ``docker/init.sql`` to a freshly-created database.
+
+    A single short-lived connection is used (no pool) so this helper is loop-
+    agnostic: each integration test calls it once during setup, the connection
+    is closed before any test code runs, and nothing is reused later.
+    """
+
     sql = _INIT_SQL_PATH.read_text(encoding="utf-8")
-    async with pool.acquire() as conn:
+    conn = await asyncpg.connect(dsn)
+    try:
         await conn.execute(sql)
-    await pool.close()
+    finally:
+        await conn.close()
 
 
 def _try_testcontainers() -> str | None:
@@ -142,24 +149,26 @@ def postgres_dsn() -> str:  # type: ignore[return]
 
 
 @pytest.fixture
-async def db_pool(postgres_dsn: str, anyio_backend: str) -> asyncpg.Pool:  # type: ignore[return]
-    """Function-scoped pool backed by a database isolated to one test."""
+async def db_pool(postgres_dsn: str) -> asyncpg.Pool:  # type: ignore[return]
+    """Function-scoped pool backed by a database isolated to one test.
+
+    The pool is created and consumed inside the same ``pytest-asyncio`` event
+    loop (the only async runner the suite uses). On teardown we ``terminate``
+    rather than ``close`` because the database itself is dropped immediately
+    after — graceful shutdown would only race with that DROP DATABASE.
+    """
 
     db_name, test_dsn = await _create_test_database(postgres_dsn)
     pool: asyncpg.Pool = await asyncpg.create_pool(test_dsn, min_size=1, max_size=3)
     try:
         yield pool
     finally:
-        # Immediate termination is deliberate here: after the test body
-        # finishes, no code should still use this function-scoped pool.
-        # Terminating avoids asyncpg close/teardown races and the database
-        # itself is dropped below, so no state can leak into another test.
         pool.terminate()
         await _drop_test_database(postgres_dsn, db_name)
 
 
 @pytest.fixture
-async def api_client(db_pool: asyncpg.Pool, anyio_backend: str) -> AsyncClient:  # type: ignore[return]
+async def api_client(db_pool: asyncpg.Pool) -> AsyncClient:  # type: ignore[return]
     """FastAPI test client backed by real PostgreSQL repositories.
 
     This is the primary fixture for controller+database integration tests.
