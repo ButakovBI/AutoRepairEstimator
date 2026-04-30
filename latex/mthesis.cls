@@ -742,6 +742,8 @@
 \newcommand{\ThesisLitReview}[1]{\gdef\@ThesisLitReview{#1}}
 \def\@IllustrMaterials{}
 \newcommand{\IllustrMaterials}[1]{\gdef\@IllustrMaterials{#1}}
+\def\@ThesisConsultants{}
+\newcommand{\ThesisConsultants}[1]{\gdef\@ThesisConsultants{#1}}
 \def\@DateApproval{}
 \newcommand{\DateApproval}[1]{\gdef\@DateApproval{#1}}
 \def\@DateAssignment{}
@@ -953,6 +955,9 @@
 \CenterLine{0pt}{\miniscule (должность, уч. степень, звание, Ф.И.О.)}
 \uline{\hfill}
 \CenterLine{0pt}{\miniscule (подпись)}
+
+\item Консультанты по работе (с указанием относящихся к ним разделов)
+\InsertUlineTextSp{\@ThesisConsultants}
 
 \end{enumerate}
 \vspace{0.5cm}
