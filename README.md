@@ -78,11 +78,11 @@ AutoRepairEstimator/
 
 ### Пример сегментации деталей
 
-![Сегментация деталей](latex\sections\images\details_inference_example.png)
+![Сегментация деталей](latex/sections/images/details_inference_example.png)
 
 ### Пример сегментации повреждений
 
-![Сегментация повреждений](latex\sections\images\damages_inference_example.png)
+![Сегментация повреждений](latex/sections/images/damages_inference_example.png)
 
 ---
 
@@ -91,22 +91,22 @@ AutoRepairEstimator/
 Полный цикл работы с ботом — от выбора режима до получения итоговой оценки.
 
 ### 1. Начальный этап выбора режима работы
-![Начальный экран](latex\sections\images\start_interface.png)
+![Начальный экран](latex/sections/images/start_interface.png)
 
 ### 2. Взаимодействие с ботом в режиме ML
-![Режим ML](latex\sections\images\ml_mode_interface.png)
+![Режим ML](latex/sections/images/ml_mode_interface.png)
 
 ### 3. Получение результата в режиме ML
-![Результат ML](latex\sections\images\ml_mode_result.png)
+![Результат ML](latex/sections/images/ml_mode_result.png)
 
 ### 4. Редактирование повреждений — удаление
-![Удаление повреждения](latex\sections\images\delete_damage.png)
+![Удаление повреждения](latex/sections/images/delete_damage.png)
 
 ### 5. Редактирование повреждений — добавление
-![Добавление повреждения](latex\sections\images\interface_damages.png)
+![Добавление повреждения](latex/sections/images/interface_damages.png)
 
 ### 6. Итоговый расчёт стоимости и длительности работ
-![Итоговый расчёт](latex\sections\images\price_result.png)
+![Итоговый расчёт](latex/sections/images/price_result.png)
 
 ---
 
