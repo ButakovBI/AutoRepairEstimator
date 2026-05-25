@@ -1,130 +1,133 @@
-# Auto Repair Estimator
+# AutoRepairEstimator - система автоматизированной предварительной оценки стоимости ремонта повреждённых автомобилей
 
-A VK bot for estimating car repair costs using computer vision (YOLOv8-seg) or manual damage selection.
+## Актуальность
 
-## Features
+Рост количества фото-обращений клиентов в автосервисах создаёт нагрузку на сотрудников: каждую заявку нужно вручную просмотреть, определить повреждения и рассчитать стоимость работ. Методы компьютерного зрения и глубокого обучения позволяют автоматизировать этот процесс. Разработанная система сокращает время обработки одного обращения в 30 раз: **с 30 минут до 1 минуты**, что существенно высвобождает сотрудников автосервиса.
 
-- **ML Mode**: Upload a photo of the damaged car — the system automatically detects parts and damage using two YOLOv8-seg models, overlays segmentation masks, and returns repair cost and time estimates.
-- **Manual Mode**: Select damaged parts and damage types via inline keyboards — get instant pricing without photo analysis.
-- **Damage Editing**: After ML inference, users can confirm, edit, or add/delete detected damages before pricing.
-- **Reliable Async Pipeline**: Kafka-based message queue with transactional outbox pattern ensures at-least-once delivery.
-- **Heartbeat Watchdog**: Automatically marks timed-out requests as failed and notifies users.
+## Описание
 
-## Architecture
+Пользователь отправляет фото повреждённого автомобиля через VK-бот. Система автоматически обнаруживает детали кузова и типы повреждений с помощью двух моделей **YOLOv8-seg**, обученных на размеченных фотографиях повреждённых автомобилей, накладывает маски сегментации и возвращает предварительную оценку стоимости и длительности ремонта. Пользователь может скорректировать список обнаруженных повреждений перед финальным расчётом. Предусмотрен ручной режим - выбор повреждений через меню без анализа фото.
 
-The system follows Clean Architecture with 3 services:
+---
 
-| Service | Technology | Port |
-|---------|-----------|------|
-| Backend API | FastAPI + asyncpg | 8000 |
-| Bot | vkbottle 4.x | — |
-| ML Worker | YOLOv8-seg + Kafka | — |
+## Стек технологий
 
-**Infrastructure**: PostgreSQL 16, Apache Kafka, MinIO S3.
+**ML и инференс**
 
-> **Why no Nginx?** The bot uses the VK Long Poll API (`vkbottle.run_polling`):
-> it initiates outbound HTTPS connections to VK and does not need to expose an
-> HTTP endpoint to receive webhooks, so a reverse proxy in front of the bot is
-> unnecessary. The backend is reached directly by internal services over the
-> Docker network.
+![Python](https://img.shields.io/badge/Python_3-3776AB?style=flat&logo=python&logoColor=white)
+![Ultralytics](https://img.shields.io/badge/Ultralytics_YOLOv8-111F68?style=flat&logo=yolo&logoColor=white)
+![NumPy](https://img.shields.io/badge/NumPy-013243?style=flat&logo=numpy&logoColor=white)
+![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?style=flat&logo=opencv&logoColor=white)
+![Pillow](https://img.shields.io/badge/Pillow-3776AB?style=flat&logo=python&logoColor=white)
 
-See the `.cursor/plans/` directory for detailed C4 diagrams and implementation plan.
+**Backend**
 
-## Quick Start
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white)
+![asyncpg](https://img.shields.io/badge/asyncpg-336791?style=flat&logo=postgresql&logoColor=white)
+![Pydantic](https://img.shields.io/badge/Pydantic-E92063?style=flat&logo=pydantic&logoColor=white)
+![Kafka](https://img.shields.io/badge/Apache_Kafka-231F20?style=flat&logo=apachekafka&logoColor=white)
+![Loguru](https://img.shields.io/badge/Loguru-222222?style=flat)
 
-### Prerequisites
-- Docker & Docker Compose
-- `.env` file (copy from `.env.example`)
+**Хранилища, инфраструктура**
 
-```bash
-cp .env.example .env
-# Edit .env — set VK_GROUP_TOKEN (and VK_GROUP_ID if you use it)
-docker compose -f docker/docker-compose.yml up -d
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL_16-336791?style=flat&logo=postgresql&logoColor=white)
+![MinIO](https://img.shields.io/badge/MinIO_S3-C72E49?style=flat&logo=minio&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)
+
+**Бот, тестирование, CI/CD**
+
+![VK](https://img.shields.io/badge/VK_Bot_(vkbottle)-0077FF?style=flat&logo=vk&logoColor=white)
+![pytest](https://img.shields.io/badge/pytest-0A9EDC?style=flat&logo=pytest&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=flat&logo=githubactions&logoColor=white)
+
+---
+
+## Структура репозитория
+
+```
+AutoRepairEstimator/
+├── src/auto_repair_estimator/
+│   ├── backend/       # FastAPI-сервис: API, бизнес-логика, компоненты отказоустойчивости
+│   ├── bot/           # VK-бот: интерфейс взаимодействия с пользователем
+│   └── ml_worker/     # ML-воркер: обработка изображений и инференс
+├── ml/                # Скрипты и обучение моделей
+├── docker/            # Dockerfile'ы, docker-compose.yml
+├── tests/             # Юнит- и интеграционные тесты
+├── scripts/           # Вспомогательные скрипты (нагрузочное тестирование и др.)
+├── docs/              # Архитектурные диаграммы
+└── .github/workflows/ # CI/CD пайплайн (GitHub Actions)
 ```
 
-The backend API will be available at `http://localhost:8000`.
+---
 
-### Development
+## ML-пайплайн
+
+Обработка фотографии проходит в два этапа:
+
+**1. Детекция деталей кузова** — YOLOv8m-seg, 12 классов:
+дверь, переднее/заднее крыло, крышка багажника, капот, крыша, фара, переднее/заднее лобовое стекло, боковое стекло, колесо, бампер.
+
+**2. Детекция повреждений** — YOLOv8m-seg на кропах каждой детали, 8 классов:
+царапина, вмятина, скол краски, ржавчина, трещина, разбитое стекло, спущенная шина, разбитая фара.
+
+**3. Визуализация** — наложение масок сегментации на исходное изображение.
+
+**4. Оценка** — расчёт стоимости и длительности ремонта по расценкам в таблицах.
+
+### Пример сегментации деталей
+
+![Сегментация деталей](latex/sections/images/details_inference_example.png)
+
+### Пример сегментации повреждений
+
+![Сегментация повреждений](latex/sections/images/damages_inference_example.png)
+
+---
+
+## Отказоустойчивость
+
+- **Transactional Outbox** — события фиксируются в БД атомарно с данными, исключая ситуацию "запись прошла, а сообщение в Kafka не дошло".
+- **Heartbeat Watchdog** — автоматически помечает зависшие заявки как `FAILED` и уведомляет пользователя.
+- **Kafka** — буферизует задачи при перегрузке ML-воркеров, обеспечивает at-least-once доставку.
+
+---
+
+## Пользовательский сценарий
+
+Полный цикл работы с ботом - от выбора режима до получения итоговой оценки.
+
+### 1. Начальный этап выбора режима работы
+![Начальный экран](latex/sections/images/start_interface.png)
+
+### 2. Взаимодействие с ботом в режиме ML
+![Режим ML](latex/sections/images/ml_mode_interface.png)
+
+### 3. Получение результата в режиме ML
+![Результат ML](latex/sections/images/ml_mode_result.png)
+
+### 4. Редактирование повреждений — удаление
+![Удаление повреждения](latex/sections/images/delete_damage.png)
+
+### 5. Редактирование повреждений — добавление
+![Добавление повреждения](latex/sections/images/interface_damages.png)
+
+### 6. Итоговый расчёт стоимости и длительности работ
+![Итоговый расчёт](latex/sections/images/price_result.png)
+
+---
+
+### Тесты и линтеры
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/
-```
-
-## Project Structure
-
-```
-src/auto_repair_estimator/
-  backend/          # FastAPI + domain + use cases + adapters
-  bot/              # vkbottle bot + handlers + keyboards
-  ml_worker/        # YOLOv8-seg inference pipeline
-ml/                 # Training scripts
-docker/             # Dockerfiles + docker-compose + init.sql
-tests/              # Unit + integration tests
-```
-
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/v1/requests` | Create repair request (ML or manual mode) |
-| GET | `/v1/requests/{id}` | Get request with detected damages |
-| POST | `/v1/requests/{id}/photo` | Confirm photo upload (transitions CREATED→QUEUED) |
-| POST | `/v1/requests/{id}/damages` | Add damage manually |
-| PATCH | `/v1/requests/{id}/damages/{damage_id}` | Edit damage type |
-| DELETE | `/v1/requests/{id}/damages/{damage_id}` | Soft-delete damage |
-| POST | `/v1/requests/{id}/confirm` | Calculate pricing and confirm (→DONE) |
-| GET | `/health` | Health check |
-
-## Request Lifecycle
-
-```
-CREATED → QUEUED → PROCESSING → PRICING → DONE
-    ↓         ↓          ↓          ↓
-   FAILED   FAILED     FAILED     FAILED  (heartbeat timeout)
-```
-
-Manual mode starts directly in PRICING state.
-
-## ML Pipeline
-
-1. **Parts Detection** (`yolov8m-seg`): 12 car parts (door, front/rear fender, trunk, hood, roof, headlight, front/rear windshield, side window, wheel, bumper). Confidence cutoff is defined once in `backend/domain/value_objects/ml_thresholds.py` (currently 0.5) — see that module for the rationale; ops can override at runtime via `PARTS_CONFIDENCE_THRESHOLD`.
-2. **Cropping**: crops every detected part; excluded parts are configurable via `MLWorkerConfig.crop_excluded_parts`.
-3. **Damage Detection** (`yolov8m-seg`): 8 damage types per crop (scratch, dent, paint_chip, rust, crack, broken_glass, flat_tire, broken_headlight). **Per-class confidence cutoffs** live in `ml_thresholds.py` (`DAMAGES_CONFIDENCE_BY_CLASS`) — edit that single file to retune any class. Current calibration: scratch & flat_tire 0.50, broken_glass & broken_headlight 0.40, rust & paint_chip 0.30, dent & crack 0.25. The env knob `DAMAGES_CONFIDENCE_THRESHOLD` still works as a **uniform** runtime override across all classes (panic knob for ops experiments).
-4. **Composition**: alpha-blend masks onto original image.
-5. **Result**: publish to Kafka `inference_results` topic.
-
-### Training Models
-
-See `scripts/ml/README.md` and `scripts/ml/colab_train.ipynb`. After training,
-copy weights into the volume the worker mounts (`docker/models/`):
-
-```powershell
-Copy-Item -Force test\best_details_2104_1133.pt docker\models\parts.pt
-Copy-Item -Force test\best_damages_21041256.pt docker\models\damages.pt
-docker compose -f docker/docker-compose.yml restart ml_worker
-```
-
-(Adjust source paths when you train new checkpoints; names **`parts.pt`** and **`damages.pt`** are fixed in `MLWorkerConfig`.)
-
-## Testing
-
-```bash
-# All tests with coverage
 pytest tests/ --cov=auto_repair_estimator --cov-fail-under=70
-
-# Lint
 ruff check src/ tests/
-ruff format --check src/ tests/
-
-# Type check
 mypy src/
 ```
 
 ## CI/CD
 
-GitHub Actions runs on every push/PR:
-1. `ruff check` — linting
-2. `ruff format --check` — formatting
-3. `mypy` — type checking
-4. `pytest --cov-fail-under=70` — tests with coverage gate
+GitHub Actions на каждый push/PR запускает:
+1. `ruff check` + `ruff format` — линтинг и форматирование
+2. `mypy` — статическая проверка типов
+3. `pytest --cov-fail-under=70` — тесты с порогом покрытия
