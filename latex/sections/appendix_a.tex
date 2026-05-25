@@ -1,0 +1,26 @@
+\chapter{Исходный код и описание структуры репозитория}\label{app:A}
+
+Исходный код разработанной системы размещён в открытом репозитории на платформе GitHub:
+
+\begin{center}
+\url{https://github.com/ButakovBI/AutoRepairEstimator}
+\end{center}
+
+Система построена на микросервисной архитектуре. Основной код системы
+находится в директории src/auto\_repair\_estimator/ и разделён на три сервиса:
+
+\begin{itemize}
+    \item backend/ - FastAPI-сервис: API, бизнес-логика, компоненты отказоустойчивости;
+    \item bot/ - VK-бот: интерфейс взаимодействия с пользователем;
+    \item ml\_worker/ - ML-воркер: обработка изображений и инференс.
+\end{itemize}
+
+Прочие директории репозитория:
+
+\begin{itemize}
+    \item ml/ - скрипты и материалы для обучения моделей;
+    \item docker/ - файлы Dockerfile и docker-compose.yml;
+    \item tests/ - юнит- и интеграционные тесты;
+    \item scripts/ - вспомогательные скрипты, в том числе нагрузочное тестирование;
+    \item .github/workflows/ - конфигурация CI/CD пайплайна на GitHub Actions.
+\end{itemize}
